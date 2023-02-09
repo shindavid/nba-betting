@@ -30,7 +30,7 @@ class Team:
         return self.abbrev
 
 
-ATL = Team('ATL', 'Atlanta Hawks', 'Western', 'Southeast')
+ATL = Team('ATL', 'Atlanta Hawks', 'Eastern', 'Southeast')
 BOS = Team('BOS', 'Boston Celtics', 'Eastern', 'Atlantic')
 BKN = Team('BKN', 'Brooklyn Nets', 'Eastern', 'Atlantic')
 CHA = Team('CHA', 'Charlotte Hornets', 'Eastern', 'Southeast')
