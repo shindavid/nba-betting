@@ -14,7 +14,7 @@ from teams import Team, EASTERN_CONFERENCE_TEAMS, WESTERN_CONFERENCE_TEAMS
 import web
 
 
-FIXURE_URL = 'https://fixturedownload.com/download/nba-2022-UTC.csv'
+FIXTURE_URL = 'https://fixturedownload.com/download/nba-2022-UTC.csv'
 
 
 class Game:
@@ -41,7 +41,7 @@ def get_games() -> List[Game]:
     """
     Returns all games.
     """
-    csv_text = web.fetch(FIXURE_URL)
+    csv_text = web.fetch(FIXTURE_URL)
     reader = csv.DictReader(csv_text.splitlines())
     games = []
     for row in reader:
