@@ -5,13 +5,12 @@ This includes past game results (from which standings are computed) and future g
 """
 import csv
 import datetime
+import itertools
 from collections import defaultdict
 from functools import total_ordering
 from typing import List, Optional, Dict
 
-import itertools
-
-from teams import Team, EASTERN_CONFERENCE_TEAMS, WESTERN_CONFERENCE_TEAMS, TEAMS_BY_CONFERENCE, TEAMS
+from teams import Team, EASTERN_CONFERENCE_TEAMS, WESTERN_CONFERENCE_TEAMS, TEAMS
 import web
 
 
@@ -239,7 +238,10 @@ class Standings:
         Source: https://en.wikipedia.org/wiki/NBA_playoffs
         """
         record = self.records[team]
-        components = [record.head_to_head_record(tied_group)]
+        components = [
+            record.overall_win_loss,  # allows for reuse of this method for finals-home-court calculation
+            record.head_to_head_record(tied_group),
+        ]
         same_division = all(team.division == tied_team.division for tied_team in tied_group)
         if same_division:
             components.append(record.division_win_loss)
@@ -306,6 +308,14 @@ class Standings:
         west_groups = self._get_tiebreaker_sets(WESTERN_CONFERENCE_TEAMS)
 
         return self._break_ties(east_groups, west_groups)
+
+    def determine_finals_home_court_advantage(self, team1: Team, team2: Team) -> Team:
+        """
+        The rules here are not clear. I'm doing what I think makes most sense.
+        """
+        tuple1 = self._tiebreaker_tuple(team1, [team1, team2], [], [])
+        tuple2 = self._tiebreaker_tuple(team2, [team1, team2], [], [])
+        return team2 if tuple1 < tuple2 else team1
 
 
 if __name__ == '__main__':
