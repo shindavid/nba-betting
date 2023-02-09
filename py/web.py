@@ -20,6 +20,8 @@ def fetch(url: str, force_refresh=False):
     assert not url_components.query, url
     assert not url_components.fragment, url
     cached_file = os.path.join(repo.downloads(), url_components.netloc, url_components.path[1:])
+    while cached_file.endswith('/'):
+        cached_file = cached_file[:-1]
 
     if not force_refresh and os.path.exists(cached_file):
         ts = os.path.getmtime(cached_file)
