@@ -90,5 +90,5 @@ def get_rosters() -> Dict[Team, Roster]:
 
 
 if __name__ == '__main__':
-    for team, roster in get_rosters().items():
-        print(roster)
+    for _roster in get_rosters().values():
+        print(_roster)
