@@ -18,10 +18,16 @@ class Team:
     division: str
 
     @staticmethod
-    def parse(s: str):
+    def parse(s: str) -> 'Team':
         if len(s) == 3:
             return TEAMS_BY_ABBREV[s]
         return TEAMS_BY_FULL_NAME[s]
+
+    def __repr__(self):
+        return f'Team({self.abbrev})'
+
+    def __str__(self):
+        return self.abbrev
 
 
 ATL = Team('ATL', 'Atlanta Hawks', 'Western', 'Southeast')
