@@ -36,6 +36,10 @@ class Game:
             self.winner = self.home_team if home_score > away_score else self.away_team
             self.loser = self.home_team if home_score < away_score else self.away_team
 
+    @property
+    def completed(self) -> bool:
+        return self.winner is not None
+
 
 def get_games() -> List[Game]:
     """
@@ -72,7 +76,7 @@ class Standings:
     def __init__(self, games: List[Game]):
         self.win_loss = defaultdict(WinLoss)
         for game in games:
-            if game.winner is not None:
+            if game.completed:
                 self.win_loss[game.winner].wins += 1
                 self.win_loss[game.loser].losses += 1
 
