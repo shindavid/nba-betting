@@ -21,9 +21,9 @@ class RaptorStats:
         self.raptor_total = float(row['raptor_total'])
 
 
-def load() -> Dict[PlayerName, RaptorStats]:
+def get_raptor_stats() -> Dict[PlayerName, RaptorStats]:
     """
-    Loads RAPTOR stats for all players.
+    Returns RAPTOR stats for all players.
     """
     csv_text = web.fetch(BY_PLAYER_CSV_URL)
     reader = csv.DictReader(csv_text.splitlines())
@@ -38,4 +38,4 @@ def load() -> Dict[PlayerName, RaptorStats]:
 
 
 if __name__ == '__main__':
-    load()
+    get_raptor_stats()
