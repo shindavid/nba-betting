@@ -5,8 +5,6 @@ This includes past game results (from which standings are computed) and future g
 """
 import csv
 import datetime
-from collections import defaultdict
-from dataclasses import dataclass
 from functools import total_ordering
 from typing import List, Optional, Dict
 
@@ -202,6 +200,4 @@ class Standings:
 
 
 if __name__ == '__main__':
-    games = get_games()
-    standings = Standings(games)
-    standings.dump()
+    Standings(get_games()).dump()
