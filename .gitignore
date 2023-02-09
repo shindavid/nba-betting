@@ -1,0 +1,8 @@
+# IDE
+.idea
+
+# web cache
+downloads/**
+
+# python cache
+**/__pycache__
