@@ -5,8 +5,11 @@ This includes past game results (from which standings are computed) and future g
 """
 import csv
 import datetime
+from collections import defaultdict
 from functools import total_ordering
 from typing import List, Optional, Dict
+
+import itertools
 
 from teams import Team, EASTERN_CONFERENCE_TEAMS, WESTERN_CONFERENCE_TEAMS, TEAMS_BY_CONFERENCE, TEAMS
 import web
@@ -43,6 +46,13 @@ class Game:
         if self.completed:
             s += f" {self.points[self.away_team]}-{self.points[self.home_team]}"
         return s
+
+    def other_team(self, team: Team) -> Team:
+        if self.home_team == team:
+            return self.away_team
+        if self.away_team == team:
+            return self.home_team
+        raise Exception(f"Team {team} is not in game {self}")
 
     def teams_are_in_same_conference(self) -> bool:
         """
@@ -106,6 +116,17 @@ class WinLossRecord:
     def win_pct(self) -> float:
         return self.wins / (self.wins + self.losses)
 
+    def __add__(self, other):
+        record = WinLossRecord()
+        record.wins = self.wins + other.wins
+        record.losses = self.losses + other.losses
+        return record
+
+    def __iadd__(self, other):
+        self.wins += other.wins
+        self.losses += other.losses
+        return self
+
     def __str__(self):
         return '%2d-%-2d [%.3f]' % (self.wins, self.losses, self.win_pct)
 
@@ -115,12 +136,15 @@ class WinLossRecord:
     def __eq__(self, other):
         return self.win_pct == other.win_pct
 
+    def __hash__(self):
+        return hash(self.win_pct)
 
-@total_ordering
+
 class Record:
     def __init__(self, team: Team):
         self.team: Team = team
         self.overall_win_loss = WinLossRecord()
+        self.win_loss_by_team = defaultdict(WinLossRecord)
         self.division_win_loss = WinLossRecord()
         self.conference_win_loss = WinLossRecord()
         self.point_differential: int = 0
@@ -140,15 +164,67 @@ class Record:
         return self.overall_win_loss.wins + self.overall_win_loss.losses
 
     def update(self, game: Game):
-        self.point_differential += game.get_point_differential(self.team)
         won = game.was_won_by(self.team)
+
         self.overall_win_loss.update(won)
+        self.win_loss_by_team[game.other_team(self.team)].update(won)
         if game.teams_are_in_same_conference():
             self.conference_win_loss.update(won)
         if game.teams_are_in_same_division():
             self.division_win_loss.update(won)
+        self.point_differential += game.get_point_differential(self.team)
 
-    def to_tuple(self):
+    def head_to_head_record(self, teams: List[Team]) -> WinLossRecord:
+        """
+        Returns the head-to-head record against the given teams.
+        """
+        record = WinLossRecord()
+        for team in teams:
+            record += self.win_loss_by_team.get(team, WinLossRecord())
+        return record
+
+
+class PlayoffSeeding:
+    """
+    The top-10 teams in each conference, sorted by playoff seeding using the official NBA tiebreaker rules.
+    """
+    def __init__(self, east_seeding: List[Team], west_seeding: List[Team]):
+        self.east_seeding = east_seeding
+        self.west_seeding = west_seeding
+
+    def dump(self):
+        print('')
+        print('PLAYOFF SEEDING')
+        for descr, teams in [('EASTERN', self.east_seeding), ('WESTERN', self.west_seeding)]:
+            print('')
+            print(f'{descr} CONFERENCE')
+            for i, team in enumerate(teams):
+                print(f'{i+1:2d}. {team}')
+
+
+TieBreakerSet = List[Team]
+
+
+class Standings:
+    def __init__(self, games: List[Game]):
+        self.records = {team: Record(team) for team in TEAMS}
+        for game in games:
+            if game.completed:
+                self.records[game.home_team].update(game)
+                self.records[game.away_team].update(game)
+
+    def dump(self):
+        east_records = {team: self.records[team] for team in EASTERN_CONFERENCE_TEAMS}
+        west_records = {team: self.records[team] for team in WESTERN_CONFERENCE_TEAMS}
+
+        for descr, subdict in [('EASTERN', east_records), ('WESTERN', west_records)]:
+            print('')
+            print(f'{descr} CONFERENCE')
+            for record in sorted(subdict.values(), key=lambda r: r.overall_win_loss, reverse=True):
+                print(record)
+
+    def _tiebreaker_tuple(self, team: Team, tied_group: TieBreakerSet, own_conference_playoff_teams: List[Team],
+                          opposing_conference_playoff_teams: List[Team]):
         """
         Tiebreaker criteria:
 
@@ -161,43 +237,78 @@ class Record:
         6. Point differential in all games.
 
         Source: https://en.wikipedia.org/wiki/NBA_playoffs
-
-        Criteria 4 and 5 are confusing to me, the definition feels circular. So I'm just leaving it at 1-3.
         """
-        return (
-            self.overall_win_loss,
-            self.division_win_loss,
-            self.conference_win_loss
-        )
+        record = self.records[team]
+        components = [record.head_to_head_record(tied_group)]
+        same_division = all(team.division == tied_team.division for tied_team in tied_group)
+        if same_division:
+            components.append(record.division_win_loss)
 
-    def __lt__(self, other):
-        return self.to_tuple() < other.to_tuple()
+        components.extend([
+            record.conference_win_loss,
+            record.head_to_head_record(own_conference_playoff_teams),
+            record.head_to_head_record(opposing_conference_playoff_teams),
+            record.point_differential
+        ])
+        return tuple(components)
 
-    def __eq__(self, other):
-        return self.to_tuple() == other.to_tuple()
+    def _break_tie(self, tied_group: TieBreakerSet, own_conference_playoff_teams: List[Team],
+                   opposing_conference_playoff_teams: List[Team]) -> List[Team]:
+        """
+        Accepts a list of teams that are tied by overall record. Applies the playoff tiebreaker rules on these teams
+        to determine the playoff seeding. Returns the seeding.
+        """
+        tuple_teams = [(self._tiebreaker_tuple(team, tied_group, own_conference_playoff_teams,
+                                               opposing_conference_playoff_teams), team) for team in tied_group]
+        return [team for _, team in sorted(tuple_teams, reverse=True)]
 
+    def _break_ties(self, east_groups: List[TieBreakerSet], west_groups: List[TieBreakerSet]) -> PlayoffSeeding:
+        """
+        Applies the playoff tiebreaker rules on east_groups and west_groups and outputs the resultant seeding.
+        """
+        east_teams = list(itertools.chain(*east_groups))
+        west_teams = list(itertools.chain(*west_groups))
 
-class Standings:
-    def __init__(self, games: List[Game]):
-        self.records = {team: Record(team) for team in TEAMS}
-        for game in games:
-            if game.completed:
-                self.records[game.home_team].update(game)
-                self.records[game.away_team].update(game)
+        east_seeding = []
+        west_seeding = []
 
-    def dump(self):
-        east_win_loss = {team: self.records[team] for team in EASTERN_CONFERENCE_TEAMS}
-        west_win_loss = {team: self.records[team] for team in WESTERN_CONFERENCE_TEAMS}
+        for east_group in east_groups:
+            east_seeding.extend(self._break_tie(east_group, east_teams, west_teams))
 
-        for descr, subdict in [('EASTERN CONFERENCE', east_win_loss), ('WESTERN CONFERENCE', west_win_loss)]:
-            print('')
-            print(descr)
-            for record in sorted(subdict.values(), reverse=True):
-                print(record)
+        for west_group in west_groups:
+            west_seeding.extend(self._break_tie(west_group, west_teams, east_teams))
 
-    def playoff_rankings(self, conference: str) -> List[Team]:
-        return list(sorted(TEAMS_BY_CONFERENCE[conference], reverse=True))[:10]
+        return PlayoffSeeding(east_seeding[:10], west_seeding[:10])
+
+    def _get_tiebreaker_sets(self, teams: List[Team]) -> List[TieBreakerSet]:
+        """
+        Returns a list of lists of teams. Each list represents a group of teams that are tied by overall record. The
+        lists are sorted from the best overall record to the worst overall record.
+
+        Only includes teams whose overall record are in the top-10. This can consist of more than 10 teams if the 10th
+        and 11th place teams have the same overall record.
+        """
+        teams_by_overall_win_loss = defaultdict(list)
+        for team in teams:
+            teams_by_overall_win_loss[self.records[team].overall_win_loss].append(team)
+
+        n_teams = 0
+        tiebreaker_sets: List[List[Team]] = []
+        for _, group in sorted(teams_by_overall_win_loss.items(), reverse=True):
+            tiebreaker_sets.append(group)
+            n_teams += len(group)
+            if n_teams >= 10:
+                break
+        return tiebreaker_sets
+
+    def playoff_seeding(self) -> PlayoffSeeding:
+        east_groups = self._get_tiebreaker_sets(EASTERN_CONFERENCE_TEAMS)
+        west_groups = self._get_tiebreaker_sets(WESTERN_CONFERENCE_TEAMS)
+
+        return self._break_ties(east_groups, west_groups)
 
 
 if __name__ == '__main__':
-    Standings(get_games()).dump()
+    _standings = Standings(get_games())
+    _standings.dump()
+    _standings.playoff_seeding().dump()
