@@ -17,8 +17,18 @@ class Team:
     conference: str
     division: str
 
+    alternative_abbrevs = {
+        'GOL': 'GSW',
+        'BRO': 'BKN',
+        'NOR': 'NOP',
+        'PHO': 'PHX',
+        'SAN': 'SAS',
+    }
+
     @staticmethod
     def parse(s: str) -> 'Team':
+        s = s.upper()
+        s = Team.alternative_abbrevs.get(s, s)
         if len(s) == 3:
             return TEAMS_BY_ABBREV[s]
         return TEAMS_BY_FULL_NAME[s]
