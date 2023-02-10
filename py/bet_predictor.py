@@ -423,7 +423,7 @@ class BetPredictor:
         seven_seed = game_7_v_8.winner
         eighth_seed_game = Game('Sim', game_7_v_8.loser, game_9_v_10.winner)
         eighth_seed_game.simulate(self.predict_home_team_win_pct(eighth_seed_game, GameType.PLAYOFFS))
-        eighth_seed = game_9_v_10.winner
+        eighth_seed = eighth_seed_game.winner
 
         return seeding[:6] + [seven_seed, eighth_seed]
 
