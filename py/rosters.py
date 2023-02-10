@@ -7,6 +7,7 @@ from typing import Optional, Dict, List
 
 import bs4
 
+import teams
 import web
 from player_names import normalize_player_name, PlayerName
 from teams import Team, TEAMS
@@ -110,6 +111,13 @@ def get_rosters() -> Dict[Team, Roster]:
             team = columns[team_index]
             current_team[name] = Team.parse(team)
             player_stats_dict[name].update(int(columns[gp_index]), float(columns[mpg_index]))
+
+    # Kevin Durant hack
+    durant = 'Kevin Durant'
+    assert durant in current_team
+    if current_team[durant] != teams.PHX:
+        print('Hack: moving Kevin Durant from %s to %s' % (current_team[durant], teams.PHX))
+        current_team[durant] = teams.PHX
 
     rosters = {}
     for team in TEAMS:
