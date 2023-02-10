@@ -23,9 +23,114 @@ At a high-level, the prediction is currently made in the following manner:
 * A Monte Carlo simulation is performed to model the remainder of the regular season and playoffs. The simulation
   results are used to predict the final outcome of the bet.
 """
+from enum import Enum
+from typing import Dict
 
+from games import get_games, Standings
+from raptor import get_raptor_stats, PlayerName, RaptorStats
+from rosters import get_rosters, Roster
 from teams import *
 
 
 DAVID_TEAMS = [ MIL, PHX, DAL, MIA, PHI, CLE, CHI, LAC, POR, NYK, CHA, IND, SAC, OKC, HOU ]
 CHRIS_TEAMS = [ GSW, MEM, BOS, BKN, DEN, UTA, MIN, NOP, ATL, TOR, LAL, SAS, WAS, ORL, DET ]
+
+
+class MinutesProjectionMethod(Enum):
+    """
+    Describes the method used to project minutes for each player.
+    """
+    RAPTOR_RANK = 1
+    SEASON_MINUTES = 2
+
+
+class TeamModel:
+    def __init__(self, roster: Roster, standings: Standings, raptor_stats: Dict[PlayerName, RaptorStats],
+                 minutes_projection_method: MinutesProjectionMethod):
+        self.roster = roster
+        self.record = standings.records[roster.team]
+        self.raptor_stats = { p: raptor_stats[p] for p in roster.players }
+
+        if minutes_projection_method == MinutesProjectionMethod.RAPTOR_RANK:
+            self.projected_minutes = self._project_minutes_via_raptor_rank()
+        elif minutes_projection_method == MinutesProjectionMethod.SEASON_MINUTES:
+            self.projected_minutes = self._project_minutes_via_season_minutes()
+        else:
+            raise ValueError('Invalid minutes projection method: %s' % minutes_projection_method)
+
+    @property
+    def team(self) -> Team:
+        return self.roster.team
+
+    def dump_minutes(self):
+        """
+        Prints the projected minutes per game for each player on the team.
+        """
+        for p, m in sorted(self.projected_minutes.items(), key=lambda x: x[1], reverse=True):
+            print('%5.1fmin %s' % (m, p))
+
+    @staticmethod
+    def get_minutes_total():
+        """
+        Returns the total number of minutes played per game by all players on the court.
+        """
+        avg_min_per_game = 48.3  # 0.3 fudge factor to account for OT
+        players_on_court = 5
+        minutes_total = avg_min_per_game * players_on_court
+        return minutes_total
+
+    def _project_minutes_via_raptor_rank(self, alpha=2) -> Dict[PlayerName, float]:
+        """
+        Returns a dictionary mapping each player to their projected minutes per game.
+
+        This method ranks the players by their raptor_total, and greedily allocate minutes to the players from best to
+        worst until all 48.3*5 = 240 minutes are used up. The maximum amount of minutes any player can be allocated is
+        their adjusted season mpg, defined as total_minutes / (games_played + alpha). The alpha factor helps to mute
+        the mpg of players who have played in a small number of games.
+        """
+        ordered_players = list(sorted(self.raptor_stats.keys(), key=lambda p: self.raptor_stats[p].raptor_total,
+                                      reverse=True))
+
+        minutes_total = TeamModel.get_minutes_total()
+        minutes = {}
+        remaining_minutes = minutes_total
+        for player in ordered_players:
+            mpg = min(self.roster.stats[player].adjusted_mpg(alpha), remaining_minutes)
+            remaining_minutes -= mpg
+            minutes[player] = mpg
+
+        if remaining_minutes:
+            raise ValueError('Remaining minutes: %f' % remaining_minutes)
+        return minutes
+
+    def _project_minutes_via_season_minutes(self) -> Dict[PlayerName, float]:
+        """
+        Returns a dictionary mapping each player to their projected minutes per game.
+
+        This method simply allocates minutes to each player proportionally to their season minutes.
+        """
+        minutes = { p: self.raptor_stats[p].minutes for p in self.roster.players }
+        scaling_factor = TeamModel.get_minutes_total() / sum(minutes.values())
+        return { p: m * scaling_factor for p, m in minutes.items() }
+
+
+class BetPredictor:
+    def __init__(self, minutes_projection_method: MinutesProjectionMethod):
+        self.games = get_games()
+        self.standings = Standings(self.games)
+        self.rosters = get_rosters()
+        self.raptor_stats = get_raptor_stats()
+        self.team_models = {roster.team: TeamModel(roster, self.standings, self.raptor_stats, minutes_projection_method)
+                            for roster in self.rosters.values()}
+
+
+def main():
+    predictor = BetPredictor(MinutesProjectionMethod.SEASON_MINUTES)
+    for team in TEAMS:
+        print('')
+        print(team)
+        predictor.team_models[team].dump_minutes()
+
+
+if __name__ == '__main__':
+    main()

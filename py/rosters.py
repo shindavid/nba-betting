@@ -7,18 +7,36 @@ from typing import Optional, Dict, List
 import bs4
 
 import web
+from player_names import normalize_player_name, PlayerName
 from teams import Team, TEAMS
 
 STUFFER_URL = 'https://www.nbastuffer.com/2022-2023-nba-player-stats/'
 
 
+class PlayerStats:
+    def __init__(self, gp, mpg):
+        self.gp = gp
+        self.mpg = mpg
+
+    def adjusted_mpg(self, alpha: float) -> float:
+        """
+        Returns the adjusted minutes per game.
+
+        This is what mpg would become if the player played alpha more games, with 0 minutes in each of those games.
+        """
+        total_m = self.gp * self.mpg
+        return total_m / (self.gp + alpha)
+
+
 class Roster:
     def __init__(self, team: Team):
         self.team = team
-        self.players: List[str] = []
+        self.players: List[PlayerName] = []
+        self.stats: Dict[PlayerName, PlayerStats] = {}
 
-    def add(self, player: str):
+    def add(self, player: str, stats: PlayerStats):
         self.players.append(player)
+        self.stats[player] = stats
         self.sort()
 
     def sort(self):
@@ -55,6 +73,9 @@ def get_rosters() -> Dict[Team, Roster]:
     header_columns = []
     name_index = None
     team_index = None
+    player_stats_dict = {}
+    gp_index = None
+    mpg_index = None
     found_header = False
     for line in html.splitlines():
         line = line.strip()
@@ -70,21 +91,24 @@ def get_rosters() -> Dict[Team, Roster]:
             header_column_indices = {c: i for i, c in enumerate(header_columns)}
             name_index = header_column_indices['FULL NAME']
             team_index = header_column_indices['TEAM']
+            gp_index = header_column_indices['GP']
+            mpg_index = header_column_indices['MPG']
             continue
         if line.startswith('<td ') and line.find('"column-1"') != -1:
             data = bs4.BeautifulSoup(line, features='html.parser')
             columns = [extract_stuffer_column(c) for c in data]
             assert len(columns) == len(header_columns)
-            name = columns[name_index]
+            name = normalize_player_name(columns[name_index])
             team = columns[team_index]
             current_team[name] = Team.parse(team)
+            player_stats_dict[name] = PlayerStats(int(columns[gp_index]), float(columns[mpg_index]))
 
     rosters = {}
     for team in TEAMS:
         rosters[team] = Roster(team)
 
     for player, team in current_team.items():
-        rosters[team].add(player)
+        rosters[team].add(player, player_stats_dict[player])
 
     return rosters
 

@@ -8,9 +8,8 @@ import csv
 from typing import Dict
 
 import web
+from player_names import normalize_player_name, PlayerName
 
-
-PlayerName = str
 BY_PLAYER_CSV_URL = 'https://projects.fivethirtyeight.com/nba-model/2023/latest_RAPTOR_by_player.csv'
 
 
@@ -29,7 +28,7 @@ def get_raptor_stats() -> Dict[PlayerName, RaptorStats]:
     reader = csv.DictReader(csv_text.splitlines())
     player_stats = {}
     for row in reader:
-        player_name = row['player_name']
+        player_name = normalize_player_name(row['player_name'])
         assert player_name not in player_stats
         stats = RaptorStats(row)
         player_stats[player_name] = stats

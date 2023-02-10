@@ -27,10 +27,9 @@ class Team:
 
     @staticmethod
     def parse(s: str) -> 'Team':
-        s = s.upper()
-        s = Team.alternative_abbrevs.get(s, s)
+        s = Team.alternative_abbrevs.get(s.upper(), s)
         if len(s) == 3:
-            return TEAMS_BY_ABBREV[s]
+            return TEAMS_BY_ABBREV[s.upper()]
         return TEAMS_BY_FULL_NAME[s]
 
     def __repr__(self):
@@ -99,7 +98,7 @@ WESTERN_CONFERENCE_DIVISIONS = ('Northwest', 'Pacific', 'Southwest')
 EASTERN_CONFERENCE_DIVISIONS = ('Atlantic', 'Central', 'Southeast')
 
 
-if __name__ == '__main__':
+def dump_teams():
     for team in TEAMS:
         print(f'{team.abbrev}: {team.full_name}')
 
@@ -114,3 +113,7 @@ if __name__ == '__main__':
         print(f'{division} Division Teams:')
         for team in teams:
             print(f'    {team.abbrev}: {team.full_name}')
+
+
+if __name__ == '__main__':
+    dump_teams()
