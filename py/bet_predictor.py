@@ -308,8 +308,10 @@ class TeamSimResults:
 class OverallSimResults:
     def __init__(self):
         self.count = 0
-        self.david_win_count = 0
-        self.chris_win_count = 0
+        self.david_team_wins = 0
+        self.chris_team_wins = 0
+        self.david_bet_wins = 0
+        self.chris_bet_wins = 0
         self.tie_count = 0
         self.team_results: Dict[Team, TeamSimResults] = {t: TeamSimResults(t) for t in TEAMS}
 
@@ -335,10 +337,12 @@ class OverallSimResults:
             team_results = self.team_results[team]
             team_results.regular_season_wins_distribution[playoff_record.standings.wins(team)] += 1
 
+        self.david_team_wins += david_team_wins
+        self.chris_team_wins += chris_team_wins
         if david_team_wins > chris_team_wins:
-            self.david_win_count += 1
+            self.david_bet_wins += 1
         elif david_team_wins < chris_team_wins:
-            self.chris_win_count += 1
+            self.chris_bet_wins += 1
         else:
             self.tie_count += 1
 
@@ -348,9 +352,11 @@ class OverallSimResults:
         print('----------------')
         print('Number of simulations: {}'.format(self.count))
         print('MPG Projection Method: {}'.format(str(minutes_projection_method).split('.')[-1]))
-        print('Pr[David wins]: {:.2f}%'.format(100 * self.david_win_count / self.count))
-        print('Pr[Chris wins]: {:.2f}%'.format(100 * self.chris_win_count / self.count))
-        print('Pr[Tie]:        {:.2f}%'.format(100 * self.tie_count / self.count))
+        print('Pr[David wins]:        {:5.2f}%'.format(100 * self.david_bet_wins / self.count))
+        print('Pr[Chris wins]:        {:5.2f}%'.format(100 * self.chris_bet_wins / self.count))
+        print('Pr[Tie]:               {:5.2f}%'.format(100 * self.tie_count / self.count))
+        print('Avg David team wins:   {:.2f}'.format(self.david_team_wins / self.count))
+        print('Avg Chris team wins:   {:.2f}'.format(self.chris_team_wins / self.count))
 
         for results in sorted(self.team_results.values(), key=lambda r: r.score(), reverse=True):
             results.dump(team_models[results.team], self.count)
