@@ -23,7 +23,6 @@ At a high-level, the prediction is currently made in the following manner:
 import copy
 import math
 from enum import Enum
-import random
 from typing import Dict, List
 
 from games import get_games, Standings, Game
@@ -188,11 +187,6 @@ class TeamModel:
         return point_adjustment
 
 
-class SimulationResults:
-    def __init__(self, standings: Standings):
-        self.standings = standings
-
-
 class PlayoffRecord:
     def __init__(self, standings: Standings, east_teams: List[Team], west_teams: List[Team]):
         self.standings = standings
@@ -228,8 +222,125 @@ class PlayoffRecord:
             assert min(top_wins, bot_wins) < 4, (teams, win_counts)
 
 
+class TeamSimResults:
+    def __init__(self, team: Team):
+        self.team = team
+        self.made_playoffs_count = 0
+        self.regular_season_wins_distribution = defaultdict(int)  # wins -> count
+        self.seed_distribution = defaultdict(int)  # seed -> count
+        self.playoff_wins_distribution = defaultdict(int)  # win_count -> count
+
+    def score(self):
+        return sum(k * v for k, v in self.playoff_wins_distribution.items())
+
+    def title_count(self):
+        return self.playoff_wins_distribution.get(16, 0)
+
+    @staticmethod
+    def distribution_dump(descr: str, distribution: Dict[int, int], denominator: int, playoff_wins: bool = False):
+        distribution_total = sum(distribution.values())
+        mean = sum(k * v for k, v in distribution.items()) / denominator
+        distribution_values = list(distribution.values())
+        if playoff_wins:
+            distribution_values.append(denominator - distribution_total)
+
+        star_weight = 100.0 / sum(distribution_values)
+
+        print('')
+        print(descr)
+        print('Mean: %.2f' % mean)
+        print('')
+
+        playoff_prefix_distr = {
+            -1: 'MISSED PLAYOFFS',
+            0:  '1ST ROUND',
+            4:  'CONF SEMIS',
+            8:  'CONF FINALS',
+            12: 'FINALS',
+            16: 'CHAMPIONS',
+        }
+        prefix_len = max(len(s) for s in playoff_prefix_distr.values())
+
+        keys = list(sorted(distribution.keys()))
+        min_key = -1 if playoff_wins else keys[0]
+        max_key = 16 if playoff_wins else keys[-1]
+        for key in range(min_key, max_key + 1):
+            count = distribution.get(key, 0)
+            prefix = ''
+            if playoff_wins:
+                if key == -1:
+                    count = denominator - distribution_total
+                prefix_fmt = '%%-%ds' % prefix_len
+                prefix = prefix_fmt % playoff_prefix_distr.get(key, '')
+
+            key_str = '%2d' % key if key >= 0 else '  '
+            stars = '*' * int(math.ceil(count * star_weight))
+            print('%s%s: %s' % (prefix, key_str, stars))
+
+    def dump(self, num_sims: int):
+        print('-' * 80)
+        print(f'{self.team} sim results')
+        print('Title probability: %.2f%%' % (self.title_count() * 100.0 / num_sims))
+        TeamSimResults.distribution_dump('Playoff wins', self.playoff_wins_distribution, num_sims, True)
+        TeamSimResults.distribution_dump('Regular season wins', self.regular_season_wins_distribution, num_sims)
+        if self.made_playoffs_count > 0:
+            TeamSimResults.distribution_dump('Playoff seed', self.seed_distribution, self.made_playoffs_count)
+
+
+class OverallSimResults:
+    def __init__(self):
+        self.count = 0
+        self.david_win_count = 0
+        self.chris_win_count = 0
+        self.tie_count = 0
+        self.team_results: Dict[Team, TeamSimResults] = {t: TeamSimResults(t) for t in TEAMS}
+
+    def update(self, playoff_record: PlayoffRecord):
+        self.count += 1
+
+        david_team_wins = 0
+        chris_team_wins = 0
+        for team, win_count in playoff_record.win_counts.items():
+            if team in DAVID_TEAMS:
+                david_team_wins += win_count
+            elif team in CHRIS_TEAMS:
+                chris_team_wins += win_count
+            else:
+                raise Exception(f'Unknown team {team}')
+
+            team_results = self.team_results[team]
+            team_results.made_playoffs_count += 1
+            team_results.seed_distribution[playoff_record.seeds[team]] += 1
+            team_results.playoff_wins_distribution[win_count] += 1
+
+        for team in TEAMS:
+            team_results = self.team_results[team]
+            team_results.regular_season_wins_distribution[playoff_record.standings.wins(team)] += 1
+
+        if david_team_wins > chris_team_wins:
+            self.david_win_count += 1
+        elif david_team_wins < chris_team_wins:
+            self.chris_win_count += 1
+        else:
+            self.tie_count += 1
+
+    def dump(self, minutes_projection_method: MinutesProjectionMethod):
+        print('')
+        print('Overall results:')
+        print('----------------')
+        print('Number of simulations: {}'.format(self.count))
+        print('MPG Projection Method: {}'.format(str(minutes_projection_method).split('.')[-1]))
+        print('Pr[David wins]: {:.2f}%'.format(100 * self.david_win_count / self.count))
+        print('Pr[Chris wins]: {:.2f}%'.format(100 * self.chris_win_count / self.count))
+        print('Pr[Tie]:        {:.2f}%'.format(100 * self.tie_count / self.count))
+
+        for results in sorted(self.team_results.values(), key=lambda r: r.score(), reverse=True):
+            results.dump(self.count)
+
+
 class BetPredictor:
     def __init__(self, minutes_projection_method: MinutesProjectionMethod):
+        self.minutes_projection_method = minutes_projection_method
         self.games = get_games()
         self.standings = Standings(self.games)
         self.rosters = get_rosters()
@@ -378,47 +489,43 @@ class BetPredictor:
 
         return home_team_win_pct
 
+    def aux_dump(self):
+        print('')
+        print('PACE')
+        pace_list = [(model.possessions_per_game, team) for team, model in self.team_models.items()]
+        for p, t in sorted(pace_list, reverse=True):
+            print('%5.1f %s' % (p, t))
+
+        print('')
+        print('OFFENSE')
+        offensive_list = [(model.offensive_efficiency, team) for team, model in self.team_models.items()]
+        for p, t in sorted(offensive_list, reverse=True):
+            print('%5.1f %s' % (p, t))
+
+        print('')
+        print('DEFENSE')
+        defense_list = [(model.defensive_efficiency, team) for team, model in self.team_models.items()]
+        for p, t in sorted(defense_list, reverse=True):
+            print('%5.1f %s' % (p, t))
+
+        print('')
+        print('TOTAL')
+        total_list = [(model.offensive_efficiency - model.defensive_efficiency, team) for team, model in self.team_models.items()]
+        for p, t in sorted(total_list, reverse=True):
+            print('%5.1f %s' % (p, t))
+
+        for team in TEAMS:
+            print('')
+            print(team)
+            self.team_models[team].dump_minutes()
+
 
 def main():
-    predictor = BetPredictor(MinutesProjectionMethod.SEASON_MINUTES)
-    playoff_record = predictor.simulate()
-    playoff_record.standings.dump()
-    playoff_record.standings.playoff_seeding().dump()
-
-    for line in playoff_record.log:
-        print(line)
-
-    if True:
-        return
-
-    print('')
-    print('PACE')
-    pace_list = [(model.possessions_per_game, team) for team, model in predictor.team_models.items()]
-    for p, t in sorted(pace_list, reverse=True):
-        print('%5.1f %s' % (p, t))
-
-    print('')
-    print('OFFENSE')
-    offensive_list = [(model.offensive_efficiency, team) for team, model in predictor.team_models.items()]
-    for p, t in sorted(offensive_list, reverse=True):
-        print('%5.1f %s' % (p, t))
-
-    print('')
-    print('DEFENSE')
-    defense_list = [(model.defensive_efficiency, team) for team, model in predictor.team_models.items()]
-    for p, t in sorted(defense_list, reverse=True):
-        print('%5.1f %s' % (p, t))
-
-    print('')
-    print('TOTAL')
-    total_list = [(model.offensive_efficiency - model.defensive_efficiency, team) for team, model in predictor.team_models.items()]
-    for p, t in sorted(total_list, reverse=True):
-        print('%5.1f %s' % (p, t))
-
-    for team in TEAMS:
-        print('')
-        print(team)
-        predictor.team_models[team].dump_minutes()
+    predictor = BetPredictor(MinutesProjectionMethod.RAPTOR_RANK)
+    sim_results = OverallSimResults()
+    for _ in range(10000):
+        sim_results.update(predictor.simulate())
+    sim_results.dump(predictor.minutes_projection_method)
 
 
 if __name__ == '__main__':

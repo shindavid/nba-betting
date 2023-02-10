@@ -174,7 +174,7 @@ class WinLossRecord:
 
     @property
     def win_pct(self) -> float:
-        return self.wins / (self.wins + self.losses)
+        return self.wins / (self.wins + self.losses) if self.wins + self.losses > 0 else 0.0
 
     def __add__(self, other):
         record = WinLossRecord()
@@ -275,6 +275,9 @@ class Standings:
     def update(self, game: Game):
         self.records[game.home_team].update(game)
         self.records[game.away_team].update(game)
+
+    def wins(self, team: Team) -> int:
+        return self.records[team].overall_win_loss.wins
 
     def dump(self):
         east_records = {team: self.records[team] for team in EASTERN_CONFERENCE_TEAMS}
