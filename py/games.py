@@ -6,6 +6,7 @@ This includes past game results (from which standings are computed) and future g
 import csv
 import datetime
 import itertools
+import random
 from collections import defaultdict
 from functools import total_ordering
 from typing import List, Optional, Dict
@@ -20,11 +21,10 @@ FIXTURE_URL = 'https://fixturedownload.com/download/nba-2022-UTC.csv'
 class Game:
     default_days_rest = 2  # used for game 1 of regular season and playoffs
 
-    def __init__(self, date: datetime.date, home_team: Team, away_team: Team,
-                 result_str: Optional[str] = None,
+    def __init__(self, date_str: str, home_team: Team, away_team: Team,
                  days_rest_for_home_team: int = default_days_rest,
                  days_rest_for_away_team: int = default_days_rest):
-        self.date = date
+        self.date_str = date_str
         self.home_team = home_team
         self.away_team = away_team
         self.days_rest_for_home_team = days_rest_for_home_team
@@ -34,21 +34,34 @@ class Game:
         self.loser: Optional[Team] = None
         self.points: Dict[Team, int] = {}
 
-        if result_str:
-            result_str_tokens = result_str.split()
-            assert len(result_str_tokens) == 3 and result_str_tokens[1] == '-', row
+    def simulate(self, home_team_win_prob: float):
+        """
+        Simulates the game and sets the result.
 
-            home_score = int(result_str_tokens[0])
-            away_score = int(result_str_tokens[2])
+        Currently, I don't have the ability to sample the exact score distribution, but I don't need it. So I just
+        set the winning/losing score to dummy values.
+        """
+        assert not self.completed, self
+        home_team_wins = random.random() < home_team_win_prob
 
-            self.points[self.home_team] = home_score
-            self.points[self.away_team] = away_score
+        if home_team_wins:
+            home_score = 100
+            away_score = 99
+        else:
+            home_score = 99
+            away_score = 100
 
-            self.winner = self.home_team if home_score > away_score else self.away_team
-            self.loser = self.home_team if home_score < away_score else self.away_team
+        self.set_result(home_score, away_score)
+
+    def set_result(self, home_score: int, away_score: int):
+        self.points[self.home_team] = home_score
+        self.points[self.away_team] = away_score
+
+        self.winner = self.home_team if home_score > away_score else self.away_team
+        self.loser = self.home_team if home_score < away_score else self.away_team
 
     def __str__(self):
-        s = f"{self.date.strftime('%Y-%m-%d')} {self.away_team}@{self.home_team}"
+        s = f"{self.date_str} {self.away_team}@{self.home_team}"
         if self.completed:
             s += f" {self.points[self.away_team]}-{self.points[self.home_team]}"
         return s
@@ -106,7 +119,7 @@ def get_games() -> List[Game]:
     csv_text = web.fetch(FIXTURE_URL)
     reader = csv.DictReader(csv_text.splitlines())
 
-    prev_game_per_team: Dict[Team, Game] = {}
+    prev_game_date_per_team: Dict[Team, datetime.date] = {}
     games = []
     for row in reader:
         dt_utc = datetime.datetime.strptime(row['Date'], '%d/%m/%Y %H:%M')  # UTC time
@@ -119,19 +132,30 @@ def get_games() -> List[Game]:
         days_rest_for_home_team = Game.default_days_rest
         days_rest_for_away_team = Game.default_days_rest
 
-        prev_home_team_game = prev_game_per_team.get(home_team, None)
-        prev_away_team_game = prev_game_per_team.get(away_team, None)
+        prev_home_team_game_date = prev_game_date_per_team.get(home_team, None)
+        prev_away_team_game_date = prev_game_date_per_team.get(away_team, None)
 
-        if prev_home_team_game:
-            days_rest_for_home_team = (date - prev_home_team_game.date).days - 1
+        if prev_home_team_game_date:
+            days_rest_for_home_team = (date - prev_home_team_game_date).days - 1
 
-        if prev_away_team_game:
-            days_rest_for_away_team = (date - prev_away_team_game.date).days - 1
+        if prev_away_team_game_date:
+            days_rest_for_away_team = (date - prev_away_team_game_date).days - 1
 
-        game = Game(date, home_team, away_team, result_str, days_rest_for_home_team, days_rest_for_away_team)
+        descr = date.strftime('%Y-%m-%d')
+        game = Game(descr, home_team, away_team, days_rest_for_home_team, days_rest_for_away_team)
+
+        if result_str:
+            result_str_tokens = result_str.split()
+            assert len(result_str_tokens) == 3 and result_str_tokens[1] == '-', row
+
+            home_score = int(result_str_tokens[0])
+            away_score = int(result_str_tokens[2])
+
+            game.set_result(home_score, away_score)
+
         games.append(game)
-        prev_game_per_team[game.home_team] = game
-        prev_game_per_team[game.away_team] = game
+        prev_game_date_per_team[game.home_team] = date
+        prev_game_date_per_team[game.away_team] = date
 
     return games
 
@@ -246,8 +270,11 @@ class Standings:
         self.records = {team: Record(team) for team in TEAMS}
         for game in games:
             if game.completed:
-                self.records[game.home_team].update(game)
-                self.records[game.away_team].update(game)
+                self.update(game)
+
+    def update(self, game: Game):
+        self.records[game.home_team].update(game)
+        self.records[game.away_team].update(game)
 
     def dump(self):
         east_records = {team: self.records[team] for team in EASTERN_CONFERENCE_TEAMS}
