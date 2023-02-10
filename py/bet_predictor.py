@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Chris Andersen and David Shin made a bet prior to the 2022-2023 NBA season. Each NBA team was claimed by exactly one
 of the two bettors. At the end of the 2022-2023 playoffs, each team scores 1 point per playoff game won. The bettor
@@ -20,6 +21,7 @@ At a high-level, the prediction is currently made in the following manner:
 * A Monte Carlo simulation is performed to model the remainder of the regular season and playoffs. The simulation
   results are used to predict the final outcome of the bet.
 """
+import argparse
 import copy
 import math
 from enum import Enum
@@ -104,6 +106,19 @@ class TeamModel:
         self.offensive_efficiency = Constants.avg_points_per_100_possessions + self.offensive_efficiency_adjustment
         self.defensive_efficiency = Constants.avg_points_per_100_possessions - self.defensive_efficiency_adjustment
         self.possessions_per_game = Constants.avg_possessions_per_game + self.possessions_per_game_adjustment
+
+    def dump_roster(self):
+        print('%8s %8s %5s %5s %5s %s' % ('ProjMPG', 'MPG', 'Off', 'Def', 'Tot', 'Player'))
+        for p, raptor in sorted(self.raptor_stats.items(), key=lambda x: x[1].raptor_total, reverse=True):
+            print('%5.1fmin %5.1fmin %+5.1f %+5.1f %+5.1f %s' % (
+                self.projected_minutes[p],
+                self.roster.stats[p].mpg,
+                raptor.raptor_offense,
+                raptor.raptor_defense,
+                raptor.raptor_total,
+                p,
+            ))
+        pass
 
     @property
     def team(self) -> Team:
@@ -277,7 +292,7 @@ class TeamSimResults:
             stars = '*' * int(math.ceil(count * star_weight))
             print('%s%s: %s' % (prefix, key_str, stars))
 
-    def dump(self, num_sims: int):
+    def dump(self, model: TeamModel, num_sims: int):
         print('-' * 80)
         print(f'{self.team} sim results')
         print('Title probability: %.2f%%' % (self.title_count() * 100.0 / num_sims))
@@ -285,6 +300,9 @@ class TeamSimResults:
         TeamSimResults.distribution_dump('Regular season wins', self.regular_season_wins_distribution, num_sims)
         if self.made_playoffs_count > 0:
             TeamSimResults.distribution_dump('Playoff seed', self.seed_distribution, self.made_playoffs_count)
+
+        print('')
+        model.dump_roster()
 
 
 class OverallSimResults:
@@ -324,7 +342,7 @@ class OverallSimResults:
         else:
             self.tie_count += 1
 
-    def dump(self, minutes_projection_method: MinutesProjectionMethod):
+    def dump(self, team_models: Dict[Team, TeamModel], minutes_projection_method: MinutesProjectionMethod):
         print('')
         print('Overall results:')
         print('----------------')
@@ -335,7 +353,7 @@ class OverallSimResults:
         print('Pr[Tie]:        {:.2f}%'.format(100 * self.tie_count / self.count))
 
         for results in sorted(self.team_results.values(), key=lambda r: r.score(), reverse=True):
-            results.dump(self.count)
+            results.dump(team_models[results.team], self.count)
 
 
 class BetPredictor:
@@ -520,12 +538,22 @@ class BetPredictor:
             self.team_models[team].dump_minutes()
 
 
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-n', '--num-sims', type=int, default=10000, help='num sims (default: %(default)s)')
+    parser.add_argument('-m', '--minutes-projection-method', type=str, default='RAPTOR_RANK',
+                        help='minutes projection method (default: %(default)s)')
+    return parser.parse_args()
+
+
 def main():
-    predictor = BetPredictor(MinutesProjectionMethod.RAPTOR_RANK)
+    args = get_args()
+    minutes_projection_method = MinutesProjectionMethod[args.minutes_projection_method]
+    predictor = BetPredictor(minutes_projection_method)
     sim_results = OverallSimResults()
-    for _ in range(10000):
+    for _ in range(args.num_sims):
         sim_results.update(predictor.simulate())
-    sim_results.dump(predictor.minutes_projection_method)
+    sim_results.dump(predictor.team_models, predictor.minutes_projection_method)
 
 
 if __name__ == '__main__':
