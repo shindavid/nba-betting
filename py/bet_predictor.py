@@ -121,7 +121,7 @@ class TeamModel:
         Returns a dictionary mapping each player to their projected minutes per game.
 
         This method ranks the players by their raptor_total, and greedily allocate minutes to the players from best to
-        worst until all 48.3*5 = 240 minutes are used up. The maximum amount of minutes any player can be allocated is
+        worst until all 48.3*5 minutes are used up. The maximum amount of minutes any player can be allocated is
         their adjusted season mpg, defined as total_minutes / (games_played + alpha). The alpha factor helps to mute
         the mpg of players who have played in a small number of games.
         """
