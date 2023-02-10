@@ -2,6 +2,7 @@
 Provides utilities to download and parse roster data.
 
 """
+from collections import defaultdict
 from typing import Optional, Dict, List
 
 import bs4
@@ -14,9 +15,17 @@ STUFFER_URL = 'https://www.nbastuffer.com/2022-2023-nba-player-stats/'
 
 
 class PlayerStats:
-    def __init__(self, gp, mpg):
-        self.gp = gp
-        self.mpg = mpg
+    def __init__(self):
+        self.gp = 0
+        self.m = 0
+
+    @property
+    def mpg(self) -> float:
+        return self.m / self.gp if self.gp else 0
+
+    def update(self, gp: int, mpg: float):
+        self.gp += gp
+        self.m += gp * mpg
 
     def adjusted_mpg(self, alpha: float) -> float:
         """
@@ -24,8 +33,7 @@ class PlayerStats:
 
         This is what mpg would become if the player played alpha more games, with 0 minutes in each of those games.
         """
-        total_m = self.gp * self.mpg
-        return total_m / (self.gp + alpha)
+        return self.m / (self.gp + alpha)
 
 
 class Roster:
@@ -73,7 +81,7 @@ def get_rosters() -> Dict[Team, Roster]:
     header_columns = []
     name_index = None
     team_index = None
-    player_stats_dict = {}
+    player_stats_dict = defaultdict(PlayerStats)
     gp_index = None
     mpg_index = None
     found_header = False
@@ -101,7 +109,7 @@ def get_rosters() -> Dict[Team, Roster]:
             name = normalize_player_name(columns[name_index])
             team = columns[team_index]
             current_team[name] = Team.parse(team)
-            player_stats_dict[name] = PlayerStats(int(columns[gp_index]), float(columns[mpg_index]))
+            player_stats_dict[name].update(int(columns[gp_index]), float(columns[mpg_index]))
 
     rosters = {}
     for team in TEAMS:
