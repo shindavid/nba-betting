@@ -17,6 +17,8 @@ class RaptorStats:
     def __init__(self, row):
         self.minutes = int(row['mp'])
         self.pace_impact = float(row['pace_impact'])
+        self.raptor_offense = float(row['raptor_offense'])
+        self.raptor_defense = float(row['raptor_defense'])
         self.raptor_total = float(row['raptor_total'])
 
 

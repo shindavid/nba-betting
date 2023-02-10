@@ -18,15 +18,22 @@ FIXTURE_URL = 'https://fixturedownload.com/download/nba-2022-UTC.csv'
 
 
 class Game:
-    def __init__(self, row):
-        self.date: datetime.date = datetime.datetime.strptime(row['Date'].split()[0], '%d/%m/%Y').date()
-        self.home_team: Team = Team.parse(row['Home Team'])
-        self.away_team: Team = Team.parse(row['Away Team'])
+    default_days_rest = 2  # used for game 1 of regular season and playoffs
+
+    def __init__(self, date: datetime.date, home_team: Team, away_team: Team,
+                 result_str: Optional[str] = None,
+                 days_rest_for_home_team: int = default_days_rest,
+                 days_rest_for_away_team: int = default_days_rest):
+        self.date = date
+        self.home_team = home_team
+        self.away_team = away_team
+        self.days_rest_for_home_team = days_rest_for_home_team
+        self.days_rest_for_away_team = days_rest_for_away_team
+
         self.winner: Optional[Team] = None
         self.loser: Optional[Team] = None
         self.points: Dict[Team, int] = {}
 
-        result_str = row['Result']  # "126 - 117"
         if result_str:
             result_str_tokens = result_str.split()
             assert len(result_str_tokens) == 3 and result_str_tokens[1] == '-', row
@@ -45,6 +52,13 @@ class Game:
         if self.completed:
             s += f" {self.points[self.away_team]}-{self.points[self.home_team]}"
         return s
+
+    def days_rest(self, team: Team):
+        if team == self.home_team:
+            return self.days_rest_for_home_team
+        if team == self.away_team:
+            return self.days_rest_for_away_team
+        raise Exception(f"Team {team} is not in game {self}")
 
     def other_team(self, team: Team) -> Team:
         if self.home_team == team:
@@ -91,10 +105,33 @@ def get_games() -> List[Game]:
     """
     csv_text = web.fetch(FIXTURE_URL)
     reader = csv.DictReader(csv_text.splitlines())
+
+    prev_game_per_team: Dict[Team, Game] = {}
     games = []
     for row in reader:
-        game = Game(row)
+        dt_utc = datetime.datetime.strptime(row['Date'], '%d/%m/%Y %H:%M')  # UTC time
+        dt_cst = dt_utc - datetime.timedelta(hours=6)  # CST time
+        date = dt_cst.date()
+        home_team = Team.parse(row['Home Team'])
+        away_team = Team.parse(row['Away Team'])
+        result_str = row['Result']  # "126 - 117"
+
+        days_rest_for_home_team = Game.default_days_rest
+        days_rest_for_away_team = Game.default_days_rest
+
+        prev_home_team_game = prev_game_per_team.get(home_team, None)
+        prev_away_team_game = prev_game_per_team.get(away_team, None)
+
+        if prev_home_team_game:
+            days_rest_for_home_team = (date - prev_home_team_game.date).days - 1
+
+        if prev_away_team_game:
+            days_rest_for_away_team = (date - prev_away_team_game.date).days - 1
+
+        game = Game(date, home_team, away_team, result_str, days_rest_for_home_team, days_rest_for_away_team)
         games.append(game)
+        prev_game_per_team[game.home_team] = game
+        prev_game_per_team[game.away_team] = game
 
     return games
 
