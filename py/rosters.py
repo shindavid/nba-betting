@@ -112,12 +112,17 @@ def get_rosters() -> Dict[Team, Roster]:
             current_team[name] = Team.parse(team)
             player_stats_dict[name].update(int(columns[gp_index]), float(columns[mpg_index]))
 
-    # Kevin Durant hack
-    durant = 'Kevin Durant'
-    assert durant in current_team
-    if current_team[durant] != teams.PHX:
-        print('Hack: moving Kevin Durant from %s to %s' % (current_team[durant], teams.PHX))
-        current_team[durant] = teams.PHX
+    player_moves = {
+        'Kevin Durant': teams.PHX,
+        'TJ Warren': teams.PHX,
+        'Mikal Bridges': teams.BKN,
+        'Cameron Johnson': teams.BKN,
+    }
+    for player, team in player_moves.items():
+        assert player in current_team, player
+        if current_team[player] != team:
+            print('Hack: moving %s from %s to %s' % (player, current_team[player], team))
+            current_team[player] = team
 
     rosters = {}
     for team in TEAMS:
