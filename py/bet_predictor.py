@@ -45,6 +45,9 @@ class MinutesProjectionMethod(Enum):
 
 
 class TeamModel:
+    avg_min_per_game = 48.3  # 0.3 fudge factor to account for OT
+    players_on_court = 5
+
     def __init__(self, roster: Roster, standings: Standings, raptor_stats: Dict[PlayerName, RaptorStats],
                  minutes_projection_method: MinutesProjectionMethod):
         self.roster = roster
@@ -58,6 +61,8 @@ class TeamModel:
         else:
             raise ValueError('Invalid minutes projection method: %s' % minutes_projection_method)
 
+        self.possessions_per_game = self._get_possessions_per_game()
+
     @property
     def team(self) -> Team:
         return self.roster.team
@@ -68,16 +73,6 @@ class TeamModel:
         """
         for p, m in sorted(self.projected_minutes.items(), key=lambda x: x[1], reverse=True):
             print('%5.1fmin %s' % (m, p))
-
-    @staticmethod
-    def get_minutes_total():
-        """
-        Returns the total number of minutes played per game by all players on the court.
-        """
-        avg_min_per_game = 48.3  # 0.3 fudge factor to account for OT
-        players_on_court = 5
-        minutes_total = avg_min_per_game * players_on_court
-        return minutes_total
 
     def _project_minutes_via_raptor_rank(self, alpha=2) -> Dict[PlayerName, float]:
         """
@@ -91,7 +86,7 @@ class TeamModel:
         ordered_players = list(sorted(self.raptor_stats.keys(), key=lambda p: self.raptor_stats[p].raptor_total,
                                       reverse=True))
 
-        minutes_total = TeamModel.get_minutes_total()
+        minutes_total = TeamModel.avg_min_per_game * TeamModel.players_on_court
         minutes = {}
         remaining_minutes = minutes_total
         for player in ordered_players:
@@ -110,8 +105,21 @@ class TeamModel:
         This method simply allocates minutes to each player proportionally to their season minutes.
         """
         minutes = { p: self.raptor_stats[p].minutes for p in self.roster.players }
-        scaling_factor = TeamModel.get_minutes_total() / sum(minutes.values())
+        scaling_factor = TeamModel.avg_min_per_game * TeamModel.players_on_court / sum(minutes.values())
         return { p: m * scaling_factor for p, m in minutes.items() }
+
+    def _get_possessions_per_game(self) -> float:
+        """
+        Returns the average number of possessions per game for the team.
+
+        This is modeled based on the RAPTOR pace_impact values scaled by the projected minutes for each player.
+        """
+        pace_adjustment = 0.0
+        for p in self.roster.players:
+            pace_adjustment += self.raptor_stats[p].pace_impact * self.projected_minutes[p] / TeamModel.avg_min_per_game
+
+        baseline = 100.0
+        return baseline + pace_adjustment
 
 
 class BetPredictor:
@@ -126,10 +134,15 @@ class BetPredictor:
 
 def main():
     predictor = BetPredictor(MinutesProjectionMethod.SEASON_MINUTES)
-    for team in TEAMS:
-        print('')
-        print(team)
-        predictor.team_models[team].dump_minutes()
+
+    pace_list = [(model.possessions_per_game, team) for team, model in predictor.team_models.items()]
+    for p, t in sorted(pace_list, reverse=True):
+        print('%5.1f %s' % (p, t))
+
+    # for team in TEAMS:
+    #     print('')
+    #     print(team)
+    #     predictor.team_models[team].dump_minutes()
 
 
 if __name__ == '__main__':
