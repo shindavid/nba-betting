@@ -47,6 +47,28 @@ class Relinquishing(Transaction):
         return f'Relinquishing({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
+class ILPlacement(Transaction):
+    """
+    An ILPlacement is a transaction that places a player on the Injured List.
+    """
+    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+        super().__init__(date, team, player, notes)
+
+    def __str__(self):
+        return f'ILPlacement({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
+
+
+class ILActivation(Transaction):
+    """
+    An ILActivation is a transaction that activates a player from the Injured List.
+    """
+    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+        super().__init__(date, team, player, notes)
+
+    def __str__(self):
+        return f'ILActivation({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
+
+
 class TransactionCategory(Enum):
     PlayerMovement = 'PlayerMovement'
     IL = 'IL'
@@ -64,7 +86,15 @@ class RawTransactionData:
     notes: str
 
 
-def extract_player_names(html_str: str) -> List[PlayerName]:
+class PlayerNameExtractionError(Exception):
+    def __init__(self, player_name_str: str, detail: str = ''):
+        msg = 'Could not extract player name from string "{}"'.format(player_name_str)
+        if detail:
+            msg += ' ' + detail
+        super().__init__(msg)
+
+
+def extract_player_names(html_str: str) -> Iterable[PlayerName]:
     """
     Accepts a string from either the "Acquired" or "Relinquished" column of the search results page. Parses a list of
     players from the string and returns them.
@@ -77,16 +107,17 @@ def extract_player_names(html_str: str) -> List[PlayerName]:
 
     Only the players are returned.
 
-    Also, some players go by multiple names. The website writes these in either of the below formats:
+    Also, some players go by multiple names. The website writes these in a format like these:
 
     "Nah'Shon Hyland / Bones Hyland"
     "Justin Jackson (Aaron)"
+    "Herbert Jones / Herb Jones (Keyshawn)"
 
     In these cases, the multiple names are checked against the names in RosterData (fetched from nbastuffer.com). If
     one of them match, that one is returned. Otherwise, the first name provided is returned.
 
     Finally, some players have naming collisions with other names, which the website resolves by adding the player's
-    birthdate in parantheses:
+    birthdate in parentheses:
 
     Brandon Williams (b. 1975-02-27)
 
@@ -108,25 +139,32 @@ def extract_player_names(html_str: str) -> List[PlayerName]:
         if non_player:
             continue
 
-        names = [n.strip() for n in t.split('/')]
-        if len(names) == 1 and names[0].find('(') > -1:
+        raw_names = [n.strip() for n in t.split('/')]
+        names = []
+        for name in raw_names:
+            if name.find('(') == -1:
+                names.append(name)
+                continue
+
             # Justin Jackson (Aaron)
             # Brandon Williams (b. 1975-02-27)
-            name = names[0]
             primary_name = name[:name.find('(')].strip()
+            names.append(primary_name)
             last_name = primary_name.split()[-1]
-            assert len(primary_name.split()) == 2, name
+            if len(primary_name.split()) != 2:
+                raise PlayerNameExtractionError(html_str)
             alternate_first_name = name[name.find('(') + 1:name.find(')')]
             if alternate_first_name.startswith('b. '):
                 # this is a birthdate disambiguation, ignore it for now
-                names = [primary_name]
+                pass
             else:
-                names = [primary_name, f'{alternate_first_name} {last_name}']
+                names.append(f'{alternate_first_name} {last_name}')
 
         names = [normalize_player_name(n) for n in names]
 
         for name in names:
-            assert looks_like_player_name(name), (t, name, html_str)
+            if not looks_like_player_name(name):
+                raise PlayerNameExtractionError(html_str)
 
         if len(names) == 1:
             yield names[0]
@@ -138,7 +176,7 @@ def extract_player_names(html_str: str) -> List[PlayerName]:
             yield names[0]
             continue
         if len(matched_names) > 1:
-            raise ValueError(f'Multiple names matched: {matched_names} for "{t}"')
+            raise PlayerNameExtractionError(html_str, f'Multiple names matched: {matched_names} for "{t}"')
         yield matched_names[0]
 
 
@@ -183,8 +221,22 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawTransactionDat
             # player without team retires
             continue
         team = Team.parse(tokens[1])
-        acquired_players = extract_player_names(tokens[2])
-        relinquished_players = extract_player_names(tokens[3])
+        try:
+            acquired_players = list(extract_player_names(tokens[2]))
+        except PlayerNameExtractionError as e:
+            if tokens[2].find('placed on IL') > -1:
+                # some dates mistakenly put this descr in the player column
+                continue
+            raise e
+
+        try:
+            relinquished_players = list(extract_player_names(tokens[3]))
+        except PlayerNameExtractionError as e:
+            if dt == datetime.date(2023, 1, 6) and tokens[3].find(' strained left quadriceps ') > -1:
+                # this is a known error, ignore it for now
+                continue
+            raise e
+
         notes = tokens[4]
         for acquired_player in acquired_players:
             yield RawTransactionData(date, team, acquired_player, None, notes)
@@ -199,18 +251,34 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawTransactionDat
         yield from _get_raw_data_from_url(f'{TRANSACTIONS_URL}{query_str}', dt)
 
 
-def get_transactions(dt: datetime.date):
+def get_transactions(dt: datetime.date) -> Iterable[Transaction]:
     """
     Returns all transactions on the given date.
     """
     moves = _get_raw_data(dt, TransactionCategory.PlayerMovement)
     for move in moves:
-        pass
-        # print(move)
+        assert None in (move.acquired_player, move.relinquished_player), move
+        assert move.acquired_player is not None or move.relinquished_player is not None, move
+        if move.relinquished_player is not None:
+            yield Relinquishing(move.date, move.team, move.relinquished_player, move.notes)
+        else:
+            yield Acquisition(move.date, move.team, move.acquired_player, move.notes)
+
+    results = _get_raw_data(dt, TransactionCategory.IL)
+    for result in results:
+        assert None in (result.acquired_player, result.relinquished_player), result
+        assert result.acquired_player is not None or result.relinquished_player is not None, result
+        if result.acquired_player is not None:
+            assert result.notes.startswith('activated from IL'), result
+            yield ILActivation(result.date, result.team, result.acquired_player, result.notes)
+        else:
+            assert result.notes.startswith('placed on IL'), result
+            yield ILPlacement(result.date, result.team, result.relinquished_player, result.notes)
 
 
 if __name__ == '__main__':
     dt = datetime.date(2023, 2, 1)
     for _ in range(300):
         dt -= datetime.timedelta(days=1)
-        get_transactions(dt)
+        for t in get_transactions(dt):
+            print(t)
