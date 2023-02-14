@@ -25,6 +25,7 @@ CACHE_HOT_DAYS = 3  # assume that website data is locked after this many days
 
 
 memory = Memory(repo.joblib_cache(), verbose=0)
+_current_url = None
 
 
 class PlayerEvent:
@@ -279,8 +280,11 @@ def trust_cached_data_for(dt: datetime.date) -> bool:
 
 
 def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawPlayerEventData]:
+    global _current_url
+    _current_url = url
+
     stale_is_ok = trust_cached_data_for(dt)
-    html = web.fetch(url, stale_is_ok=stale_is_ok, verbose=True)
+    html = web.fetch(url, stale_is_ok=stale_is_ok, verbose=False)
 
     if html.find('There were no matching transactions found.') != -1:
         return []
@@ -376,11 +380,16 @@ def get_player_events_iterable(dt: datetime.date) -> Iterable[PlayerEvent]:
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
+        notes = result.notes
         if result.acquired_player is not None:
-            assert result.notes.startswith('activated from I'), result
+            assert notes.startswith('activated from I'), result
             yield ILActivation(result.date, result.team, result.acquired_player, result.notes)
         else:
-            assert result.notes.startswith('placed on I'), result
+            if notes.find('(DNP)') != -1:
+                # website bug, this is mis-categorized as a placement on IL
+                yield MissedGame(result.date, result.team, result.relinquished_player, result.notes)
+                continue
+            assert notes.startswith('placed on I') or notes.find('(out for season)') != -1, result
             yield ILPlacement(result.date, result.team, result.relinquished_player, result.notes)
 
     results = _get_raw_data(dt, PlayerEventCategory.Injuries)
@@ -388,6 +397,10 @@ def get_player_events_iterable(dt: datetime.date) -> Iterable[PlayerEvent]:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
         if result.acquired_player is not None:
+            if result.notes.find('(DNP)') != -1:
+                # website bug, this is mis-categorized as a return from IL
+                yield MissedGame(result.date, result.team, result.acquired_player, result.notes)
+                continue
             assert result.notes.startswith('returned to lineup'), result
             yield ReturnToLineup(result.date, result.team, result.acquired_player, result.notes)
         else:
@@ -420,20 +433,33 @@ def get_player_events_iterable(dt: datetime.date) -> Iterable[PlayerEvent]:
                 continue
             if result.notes.find('suspension reduced') != -1:
                 continue
-            assert result.notes.startswith('suspended ') or result.notes.startswith('placed on suspended list'), result
+            start_phrases = (
+                'suspended ',
+                'placed on suspended list',
+                'team kicked player out'
+            )
+            assert any(result.notes.startswith(p) for p in start_phrases), result
             yield Suspension(result.date, result.team, result.relinquished_player, result.notes)
+
+
+def _get_player_events_list_helper(dt: datetime.date) -> List[PlayerEvent]:
+    try:
+        return list(get_player_events_iterable(dt))
+    except Exception as e:
+        print(f'Encountered exception while parsing {_current_url}')
+        raise e
 
 
 #@memory.cache
 def get_player_events_list(dt: datetime.date) -> List[PlayerEvent]:
-    return list(get_player_events_iterable(dt))
+    return _get_player_events_list_helper(dt)
 
 
 def get_player_events(dt: datetime.date) -> List[PlayerEvent]:
     if trust_cached_data_for(dt):
         return get_player_events_list(dt)
     else:
-        return list(get_player_events_iterable(dt))
+        return _get_player_events_list_helper(dt)
 
 
 def dump_all_player_events():
