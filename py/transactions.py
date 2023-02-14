@@ -69,6 +69,42 @@ class ILActivation(Transaction):
         return f'ILActivation({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
+class MissedGame(Transaction):
+    """
+    A MissedGame is a transaction that indicates a player missed a game due to injury, personal reason, or suspension.
+    """
+    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+        super().__init__(date, team, player, notes)
+
+    def __str__(self):
+        return f'MissedGame({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
+
+
+class Suspension(Transaction):
+    """
+    A Suspension is a transaction that indicates a player was suspended for 1 or more games.
+    """
+    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+        super().__init__(date, team, player, notes)
+
+    def __str__(self):
+        return f'Suspension({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
+
+
+class ReturnToLineup(Transaction):
+    """
+    A ReturnToLineup is a transaction that returns a player to the lineup after missing games (MissedGame or
+    Suspension).
+
+    TODO: merge with ILActivation?
+    """
+    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+        super().__init__(date, team, player, notes)
+
+    def __str__(self):
+        return f'ReturnToLineup({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
+
+
 class TransactionCategory(Enum):
     PlayerMovement = 'PlayerMovement'
     IL = 'IL'
@@ -232,8 +268,10 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawTransactionDat
         try:
             relinquished_players = list(extract_player_names(tokens[3]))
         except PlayerNameExtractionError as e:
+            # some known bugs in data
             if dt == datetime.date(2023, 1, 6) and tokens[3].find(' strained left quadriceps ') > -1:
-                # this is a known error, ignore it for now
+                continue
+            if dt == datetime.date(2022, 11, 21) and tokens[3].find(' Heat') > -1:
                 continue
             raise e
 
@@ -254,6 +292,8 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawTransactionDat
 def get_transactions(dt: datetime.date) -> Iterable[Transaction]:
     """
     Returns all transactions on the given date.
+
+    TODO: cache output to disk
     """
     moves = _get_raw_data(dt, TransactionCategory.PlayerMovement)
     for move in moves:
@@ -275,6 +315,39 @@ def get_transactions(dt: datetime.date) -> Iterable[Transaction]:
             assert result.notes.startswith('placed on IL'), result
             yield ILPlacement(result.date, result.team, result.relinquished_player, result.notes)
 
+    results = _get_raw_data(dt, TransactionCategory.Injuries)
+    for result in results:
+        assert None in (result.acquired_player, result.relinquished_player), result
+        assert result.acquired_player is not None or result.relinquished_player is not None, result
+        if result.acquired_player is not None:
+            assert result.notes.startswith('returned to lineup'), result
+            yield ReturnToLineup(result.date, result.team, result.acquired_player, result.notes)
+        else:
+            yield MissedGame(result.date, result.team, result.relinquished_player, result.notes)
+
+    results = _get_raw_data(dt, TransactionCategory.Personal)
+    for result in results:
+        assert None in (result.acquired_player, result.relinquished_player), result
+        assert result.acquired_player is not None or result.relinquished_player is not None, result
+        if result.acquired_player is not None:
+            assert result.notes in ('returned to lineup', 'activated from IL'), result
+            yield ReturnToLineup(result.date, result.team, result.acquired_player, result.notes)
+        else:
+            yield MissedGame(result.date, result.team, result.relinquished_player, result.notes)
+
+    results = _get_raw_data(dt, TransactionCategory.Disciplinary)
+    for result in results:
+        assert None in (result.acquired_player, result.relinquished_player), result
+        assert result.acquired_player is not None or result.relinquished_player is not None, result
+        if result.acquired_player is not None:
+            assert result.notes == 'reinstated from suspension', result
+            yield ReturnToLineup(result.date, result.team, result.acquired_player, result.notes)
+        else:
+            if result.notes.startswith('fined ') or result.notes.startswith('gined '):  # "gined" typo in data
+                continue
+            assert result.notes.startswith('suspended '), result
+            yield Suspension(result.date, result.team, result.relinquished_player, result.notes)
+
 
 if __name__ == '__main__':
     dt = datetime.date(2023, 2, 1)
@@ -282,3 +355,4 @@ if __name__ == '__main__':
         dt -= datetime.timedelta(days=1)
         for t in get_transactions(dt):
             print(t)
+            
