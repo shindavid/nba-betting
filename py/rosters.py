@@ -3,16 +3,38 @@ Provides utilities to download and parse roster data.
 
 """
 from collections import defaultdict
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Set
 
 import bs4
 
 import teams
 import web
-from player_names import normalize_player_name, PlayerName
 from teams import Team, TEAMS
 
 STUFFER_URL = 'https://www.nbastuffer.com/2022-2023-nba-player-stats/'
+
+
+PlayerName = str
+
+
+def normalize_player_name(player_name: PlayerName) -> PlayerName:
+    """
+    Normalizes a player name to a standard format.
+    """
+    return player_name.replace('.', '')
+
+
+def looks_like_player_name(s: str) -> bool:
+    """
+    Heuristically determines if the given string looks like a player name.
+
+    "Justin Holiday" -> True
+    "2029 second round pick (?-?)" -> False
+    "cash" -> False
+    "Timberwolves option to swap 2024 second round picks with Lakers (?-?)" -> False
+    """
+    tokens = s.split()
+    return 1 < len(tokens) < 5 and all(t[0].isupper() for t in tokens)
 
 
 class PlayerStats:
@@ -66,7 +88,34 @@ def extract_stuffer_column(x) -> Optional[str]:
     return None
 
 
-def get_rosters() -> Dict[Team, Roster]:
+class RosterData:
+    _all_player_names: Set[PlayerName] = set()
+    _data: Dict[Team, Roster] = None
+
+    @staticmethod
+    def load():
+        RosterData._data = _get_rosters()
+        for roster in RosterData._data.values():
+            for player_name in roster.players:
+                RosterData._all_player_names.add(player_name)
+
+    @staticmethod
+    def get_all_player_names() -> Set[PlayerName]:
+        if RosterData._data is None:
+            RosterData.load()
+        return RosterData._all_player_names
+
+    @staticmethod
+    def get() -> Dict[Team, Roster]:
+        """
+        Do not modify the returned dictionary.
+        """
+        if RosterData._data is None:
+            RosterData.load()
+        return RosterData._data
+
+
+def _get_rosters() -> Dict[Team, Roster]:
     """
     This is a bit nasty as I'm parsing raw HTML.
 
@@ -117,6 +166,15 @@ def get_rosters() -> Dict[Team, Roster]:
         'TJ Warren': teams.PHX,
         'Mikal Bridges': teams.BKN,
         'Cameron Johnson': teams.BKN,
+
+        'Russell Westbrook': teams.UTA,
+        'Juan Toscano-Anderson': teams.UTA,
+        'Damian Jones': teams.UTA,
+        "D'Angelo Russell": teams.LAL,
+        'Malik Beasley': teams.LAL,
+        'Jarred Vanderbilt': teams.LAL,
+        'Mike Conley': teams.MIN,
+        'Nickeil Alexander-Walker': teams.MIN,
     }
     for player, team in player_moves.items():
         assert player in current_team, player
@@ -135,5 +193,5 @@ def get_rosters() -> Dict[Team, Roster]:
 
 
 if __name__ == '__main__':
-    for _roster in get_rosters().values():
+    for _roster in RosterData.get().values():
         print(_roster)

@@ -25,11 +25,25 @@ class Team:
         'SAN': 'SAS',
     }
 
+    @property
+    def nickname(self) -> str:
+        """
+        Returns "Blazers" for "Portland Trail Blazers".
+        """
+        return self.full_name.split()[-1]
+
     @staticmethod
     def parse(s: str) -> 'Team':
         s = Team.alternative_abbrevs.get(s.upper(), s)
-        if len(s) == 3:
-            return TEAMS_BY_ABBREV[s.upper()]
+
+        team = TEAMS_BY_ABBREV.get(s.upper(), None)
+        if team is not None:
+            return team
+
+        team = TEAMS_BY_NICKNAME.get(s, None)
+        if team is not None:
+            return team
+
         return TEAMS_BY_FULL_NAME[s]
 
     def __repr__(self):
@@ -77,6 +91,7 @@ TEAMS = [ ATL, BOS, BKN, CHA, CHI, CLE, DAL, DEN, DET, GSW, HOU, IND, LAC, LAL, 
 
 TEAMS_BY_ABBREV = { team.abbrev: team for team in TEAMS }
 TEAMS_BY_FULL_NAME = { team.full_name: team for team in TEAMS }
+TEAMS_BY_NICKNAME = { team.nickname: team for team in TEAMS }
 
 TEAMS_BY_CONFERENCE = defaultdict(list)
 [TEAMS_BY_CONFERENCE[team.conference].append(team) for team in TEAMS]

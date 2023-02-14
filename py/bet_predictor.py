@@ -28,8 +28,8 @@ from enum import Enum
 from typing import Dict, List
 
 from games import get_games, Standings, Game
-from raptor import get_raptor_stats, PlayerName, RaptorStats
-from rosters import get_rosters, Roster
+from raptor import get_raptor_stats, RaptorStats
+from rosters import RosterData, Roster, PlayerName
 from teams import *
 
 
@@ -152,7 +152,9 @@ class TeamModel:
             minutes[player] = mpg
 
         if remaining_minutes:
-            raise ValueError('Remaining minutes: %f' % remaining_minutes)
+            for p, m in sorted(minutes.items(), key=lambda x: x[1], reverse=True):
+                print('%5.1fpmpg %5.1fmpg %5.1fampg %s' % (m, self.roster.stats[p].mpg, self.roster.stats[p].adjusted_mpg(alpha), p))
+            raise ValueError('Remaining minutes: %f [%s]' % (remaining_minutes, self.team))
         return minutes
 
     def _project_minutes_via_season_minutes(self) -> Dict[PlayerName, float]:
@@ -367,7 +369,7 @@ class BetPredictor:
         self.minutes_projection_method = minutes_projection_method
         self.games = get_games()
         self.standings = Standings(self.games)
-        self.rosters = get_rosters()
+        self.rosters = RosterData.get()
         self.raptor_stats = get_raptor_stats()
         self.team_models = {roster.team: TeamModel(roster, self.standings, self.raptor_stats, minutes_projection_method)
                             for roster in self.rosters.values()}

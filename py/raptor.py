@@ -8,7 +8,7 @@ import csv
 from typing import Dict
 
 import web
-from player_names import normalize_player_name, PlayerName
+from rosters import PlayerName, normalize_player_name
 
 BY_PLAYER_CSV_URL = 'https://projects.fivethirtyeight.com/nba-model/2023/latest_RAPTOR_by_player.csv'
 
