@@ -17,7 +17,7 @@ from teams import Team
 TRANSACTIONS_URL = 'https://prosportstransactions.com/basketball/Search/SearchResults.php'
 
 
-class Transaction:
+class PlayerEvent:
     def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
         self.date = date
         self.team = team
@@ -25,9 +25,9 @@ class Transaction:
         self.notes = notes
 
 
-class Acquisition(Transaction):
+class Acquisition(PlayerEvent):
     """
-    An Acquisition is a transaction that adds a player to a team.
+    An Acquisition is a transaction that adds a player to a team, by signing, trade, or draft.
     """
     def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
         super().__init__(date, team, player, notes)
@@ -36,9 +36,9 @@ class Acquisition(Transaction):
         return f'Acquisition({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
-class Relinquishing(Transaction):
+class Relinquishing(PlayerEvent):
     """
-    A Relinquishing is a transaction that removes a player from a team.
+    A Relinquishing is a transaction that removes a player from a team, either via trade or waiver.
     """
     def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
         super().__init__(date, team, player, notes)
@@ -47,7 +47,7 @@ class Relinquishing(Transaction):
         return f'Relinquishing({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
-class ILPlacement(Transaction):
+class ILPlacement(PlayerEvent):
     """
     An ILPlacement is a transaction that places a player on the Injured List.
     """
@@ -58,7 +58,7 @@ class ILPlacement(Transaction):
         return f'ILPlacement({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
-class ILActivation(Transaction):
+class ILActivation(PlayerEvent):
     """
     An ILActivation is a transaction that activates a player from the Injured List.
     """
@@ -69,7 +69,7 @@ class ILActivation(Transaction):
         return f'ILActivation({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
-class MissedGame(Transaction):
+class MissedGame(PlayerEvent):
     """
     A MissedGame is a transaction that indicates a player missed a game due to injury, personal reason, or suspension.
     """
@@ -80,7 +80,7 @@ class MissedGame(Transaction):
         return f'MissedGame({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
-class Suspension(Transaction):
+class Suspension(PlayerEvent):
     """
     A Suspension is a transaction that indicates a player was suspended for 1 or more games.
     """
@@ -91,7 +91,7 @@ class Suspension(Transaction):
         return f'Suspension({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
-class ReturnToLineup(Transaction):
+class ReturnToLineup(PlayerEvent):
     """
     A ReturnToLineup is a transaction that returns a player to the lineup after missing games (MissedGame or
     Suspension).
@@ -105,7 +105,7 @@ class ReturnToLineup(Transaction):
         return f'ReturnToLineup({self.date.strftime("%Y-%m-%d")}, {self.team}, {self.player}, "{self.notes}")'
 
 
-class TransactionCategory(Enum):
+class PlayerEventCategory(Enum):
     PlayerMovement = 'PlayerMovement'
     IL = 'IL'
     Injuries = 'Injuries'
@@ -114,7 +114,7 @@ class TransactionCategory(Enum):
 
 
 @dataclass
-class RawTransactionData:
+class RawPlayerEventData:
     date: datetime.date
     team: Team
     acquired_player: Optional[PlayerName]
@@ -216,7 +216,7 @@ def extract_player_names(html_str: str) -> Iterable[PlayerName]:
         yield matched_names[0]
 
 
-def _get_raw_data(dt: datetime.date, category: TransactionCategory) -> List[RawTransactionData]:
+def _get_raw_data(dt: datetime.date, category: PlayerEventCategory) -> List[RawPlayerEventData]:
     category_str = category.value
     dt_str = dt.strftime('%Y-%m-%d')
     params = {
@@ -230,7 +230,7 @@ def _get_raw_data(dt: datetime.date, category: TransactionCategory) -> List[RawT
     return list(_get_raw_data_from_url(url, dt))
 
 
-def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawTransactionData]:
+def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawPlayerEventData]:
     stale_is_ok = dt < datetime.date.today() - datetime.timedelta(days=3)
     html = web.fetch(url, stale_is_ok=stale_is_ok, verbose=False)
 
@@ -277,9 +277,9 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawTransactionDat
 
         notes = tokens[4]
         for acquired_player in acquired_players:
-            yield RawTransactionData(date, team, acquired_player, None, notes)
+            yield RawPlayerEventData(date, team, acquired_player, None, notes)
         for relinquished_player in relinquished_players:
-            yield RawTransactionData(date, team, None, relinquished_player, notes)
+            yield RawPlayerEventData(date, team, None, relinquished_player, notes)
 
     next_tags = [a for a in soup.find_all('a') if a.text == 'Next']
     assert len(next_tags) <= 1
@@ -289,13 +289,13 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawTransactionDat
         yield from _get_raw_data_from_url(f'{TRANSACTIONS_URL}{query_str}', dt)
 
 
-def get_transactions(dt: datetime.date) -> Iterable[Transaction]:
+def get_transactions(dt: datetime.date) -> Iterable[PlayerEvent]:
     """
     Returns all transactions on the given date.
 
     TODO: cache output to disk
     """
-    moves = _get_raw_data(dt, TransactionCategory.PlayerMovement)
+    moves = _get_raw_data(dt, PlayerEventCategory.PlayerMovement)
     for move in moves:
         assert None in (move.acquired_player, move.relinquished_player), move
         assert move.acquired_player is not None or move.relinquished_player is not None, move
@@ -304,7 +304,7 @@ def get_transactions(dt: datetime.date) -> Iterable[Transaction]:
         else:
             yield Acquisition(move.date, move.team, move.acquired_player, move.notes)
 
-    results = _get_raw_data(dt, TransactionCategory.IL)
+    results = _get_raw_data(dt, PlayerEventCategory.IL)
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
@@ -315,7 +315,7 @@ def get_transactions(dt: datetime.date) -> Iterable[Transaction]:
             assert result.notes.startswith('placed on IL'), result
             yield ILPlacement(result.date, result.team, result.relinquished_player, result.notes)
 
-    results = _get_raw_data(dt, TransactionCategory.Injuries)
+    results = _get_raw_data(dt, PlayerEventCategory.Injuries)
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
@@ -325,7 +325,7 @@ def get_transactions(dt: datetime.date) -> Iterable[Transaction]:
         else:
             yield MissedGame(result.date, result.team, result.relinquished_player, result.notes)
 
-    results = _get_raw_data(dt, TransactionCategory.Personal)
+    results = _get_raw_data(dt, PlayerEventCategory.Personal)
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
@@ -335,7 +335,7 @@ def get_transactions(dt: datetime.date) -> Iterable[Transaction]:
         else:
             yield MissedGame(result.date, result.team, result.relinquished_player, result.notes)
 
-    results = _get_raw_data(dt, TransactionCategory.Disciplinary)
+    results = _get_raw_data(dt, PlayerEventCategory.Disciplinary)
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
@@ -355,4 +355,3 @@ if __name__ == '__main__':
         dt -= datetime.timedelta(days=1)
         for t in get_transactions(dt):
             print(t)
-            
