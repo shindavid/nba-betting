@@ -1,24 +1,35 @@
 """
-Provides utilities to download and parse historical transaction data. This includes signings, waivers, trades, and
+Provides utilities to download and parse historical player event data. This includes signings, waivers, trades, and
 injuries.
 """
 import datetime
+import string
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, List, Iterable
 from urllib.parse import urlencode
 
 import bs4
+from joblib import Memory
 
-import web
+import repo
 from rosters import PlayerName, normalize_player_name, looks_like_player_name, RosterData
-from teams import Team
+from teams import Team, TeamNameParseError
+import web
+
 
 TRANSACTIONS_URL = 'https://prosportstransactions.com/basketball/Search/SearchResults.php'
+LEBRON_JAMES_DRAFT_DATE = datetime.date(2003, 6, 26)
+START_DATE = LEBRON_JAMES_DRAFT_DATE
+CACHE_HOT_DAYS = 3  # assume that website data is locked after this many days
+
+
+memory = Memory(repo.joblib_cache(), verbose=0)
 
 
 class PlayerEvent:
-    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+    # team = None means that the team no longer exists (e.g., Sonics)
+    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
         self.date = date
         self.team = team
         self.player = player
@@ -29,7 +40,7 @@ class Acquisition(PlayerEvent):
     """
     An Acquisition is a transaction that adds a player to a team, by signing, trade, or draft.
     """
-    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -40,7 +51,7 @@ class Relinquishing(PlayerEvent):
     """
     A Relinquishing is a transaction that removes a player from a team, either via trade or waiver.
     """
-    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -51,7 +62,7 @@ class ILPlacement(PlayerEvent):
     """
     An ILPlacement is a transaction that places a player on the Injured List.
     """
-    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -62,7 +73,7 @@ class ILActivation(PlayerEvent):
     """
     An ILActivation is a transaction that activates a player from the Injured List.
     """
-    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -73,7 +84,7 @@ class MissedGame(PlayerEvent):
     """
     A MissedGame is a transaction that indicates a player missed a game due to injury, personal reason, or suspension.
     """
-    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -84,7 +95,7 @@ class Suspension(PlayerEvent):
     """
     A Suspension is a transaction that indicates a player was suspended for 1 or more games.
     """
-    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -98,7 +109,7 @@ class ReturnToLineup(PlayerEvent):
 
     TODO: merge with ILActivation?
     """
-    def __init__(self, date: datetime.date, team: Team, player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -126,7 +137,7 @@ class PlayerNameExtractionError(Exception):
     def __init__(self, player_name_str: str, detail: str = ''):
         msg = 'Could not extract player name from string "{}"'.format(player_name_str)
         if detail:
-            msg += ' ' + detail
+            msg += f' ({detail})'
         super().__init__(msg)
 
 
@@ -143,32 +154,52 @@ def extract_player_names(html_str: str) -> Iterable[PlayerName]:
 
     Only the players are returned.
 
-    Also, some players go by multiple names. The website writes these in a format like these:
+    There are a number of complexities to note:
+
+    MULTIPLE NAMES
+
+    Some players go by multiple names. The website writes these in a format like these:
 
     "Nah'Shon Hyland / Bones Hyland"
     "Justin Jackson (Aaron)"
     "Herbert Jones / Herb Jones (Keyshawn)"
+    "(William) Tony Parker"
+    "Michael Smith (John) (Providence)"
 
     In these cases, the multiple names are checked against the names in RosterData (fetched from nbastuffer.com). If
     one of them match, that one is returned. Otherwise, the first name provided is returned.
 
-    Finally, some players have naming collisions with other names, which the website resolves by adding the player's
+    BIRTHDATE CLARIFIERS
+
+    Some players have naming collisions with other names, which the website resolves by adding the player's
     birthdate in parentheses:
 
     Brandon Williams (b. 1975-02-27)
 
     I am not sure how to handle this at present, as nbastuffer.com does not provide birthdates. Just ignoring the
-    birthdates for now.
+    birthdates for now. This might lead to different players getting mapped to the same name.
+
+    CHARACTER CODES:
+
+    Some players, the website disambiguates collisions by adding a single character identifier in parentheses:
+
+    "Mike Smith (b)"
+
+    Like with birthdates, I'm just ignoring for now. This might lead to different players getting mapped to the same
+    name.
     """
     if not html_str:
         return []
+    if html_str == 'v':  # website typo
+        return []
+
     dot = '•'
     tokens = [t.strip() for t in html_str.split(dot) if t]
     all_player_names = RosterData.get_all_player_names()
     for t in tokens:
         non_player = False
         subtokens = t.split()
-        for word in ('cash', 'pick', 'picks', 'option', 'group', 'rights'):
+        for word in ('cash', 'pick', 'picks', 'option', 'group', 'rights', 'exception', 'select'):
             if word in subtokens:
                 non_player = True
                 break
@@ -184,14 +215,27 @@ def extract_player_names(html_str: str) -> Iterable[PlayerName]:
 
             # Justin Jackson (Aaron)
             # Brandon Williams (b. 1975-02-27)
-            primary_name = name[:name.find('(')].strip()
+            # (William) Tony Parker
+
+            # splice out the parenthesized part
+            primary_name = ' '.join((name[:name.find('(')] + name[name.rfind(')') + 1:]).split())
+
             names.append(primary_name)
+            if not primary_name:
+                raise PlayerNameExtractionError(html_str, name)
             last_name = primary_name.split()[-1]
             if len(primary_name.split()) != 2:
-                raise PlayerNameExtractionError(html_str)
+                raise PlayerNameExtractionError(html_str, name)
+
             alternate_first_name = name[name.find('(') + 1:name.find(')')]
             if alternate_first_name.startswith('b. '):
                 # this is a birthdate disambiguation, ignore it for now
+                pass
+            elif len(alternate_first_name) == 1 and alternate_first_name.islower():
+                # this is a character code disambiguation, ignore it for now
+                pass
+            elif alternate_first_name.startswith('changed to '):
+                # Marcus Banks (changed to Jumaine Jones on 2004-08-13)
                 pass
             else:
                 names.append(f'{alternate_first_name} {last_name}')
@@ -200,7 +244,7 @@ def extract_player_names(html_str: str) -> Iterable[PlayerName]:
 
         for name in names:
             if not looks_like_player_name(name):
-                raise PlayerNameExtractionError(html_str)
+                raise PlayerNameExtractionError(html_str, name)
 
         if len(names) == 1:
             yield names[0]
@@ -230,9 +274,13 @@ def _get_raw_data(dt: datetime.date, category: PlayerEventCategory) -> List[RawP
     return list(_get_raw_data_from_url(url, dt))
 
 
+def trust_cached_data_for(dt: datetime.date) -> bool:
+    return dt < datetime.date.today() - datetime.timedelta(days=CACHE_HOT_DAYS)
+
+
 def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawPlayerEventData]:
-    stale_is_ok = dt < datetime.date.today() - datetime.timedelta(days=3)
-    html = web.fetch(url, stale_is_ok=stale_is_ok, verbose=False)
+    stale_is_ok = trust_cached_data_for(dt)
+    html = web.fetch(url, stale_is_ok=stale_is_ok, verbose=True)
 
     if html.find('There were no matching transactions found.') != -1:
         return []
@@ -256,7 +304,23 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawPlayerEventDat
         if tokens[1] == '':
             # player without team retires
             continue
-        team = Team.parse(tokens[1])
+
+        notes = tokens[4]
+        if notes.startswith('transfer of ownership'):
+            # this is a transfer of ownership, not a player transaction
+            continue
+
+        try:
+            team = Team.parse(tokens[1])
+        except TeamNameParseError as e:
+            if tokens[1] in ('Sonics', 'Bobcats'):
+                # Some teams that don't exist anymore, or were renamed. For our purposes, we don't care about matching
+                # up old team names with current ones
+                team = None
+                pass
+            else:
+                raise e
+
         try:
             acquired_players = list(extract_player_names(tokens[2]))
         except PlayerNameExtractionError as e:
@@ -273,9 +337,10 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawPlayerEventDat
                 continue
             if dt == datetime.date(2022, 11, 21) and tokens[3].find(' Heat') > -1:
                 continue
+            if dt == datetime.date(2004, 7, 7) and tokens[3].find(' Kings') > -1:
+                continue
             raise e
 
-        notes = tokens[4]
         for acquired_player in acquired_players:
             yield RawPlayerEventData(date, team, acquired_player, None, notes)
         for relinquished_player in relinquished_players:
@@ -289,16 +354,19 @@ def _get_raw_data_from_url(url, dt: datetime.date) -> Iterable[RawPlayerEventDat
         yield from _get_raw_data_from_url(f'{TRANSACTIONS_URL}{query_str}', dt)
 
 
-def get_transactions(dt: datetime.date) -> Iterable[PlayerEvent]:
+def get_player_events_iterable(dt: datetime.date) -> Iterable[PlayerEvent]:
     """
-    Returns all transactions on the given date.
-
-    TODO: cache output to disk
+    Returns all player events on the given date.
     """
+    non_player_jobs = ('coach', 'manager', 'gm', 'president', 'owner', 'advisor', 'director', 'coordinator', 'scout',
+                       'executive', 'trainer', 'assistant', 'vp', 'ownership')
     moves = _get_raw_data(dt, PlayerEventCategory.PlayerMovement)
     for move in moves:
         assert None in (move.acquired_player, move.relinquished_player), move
         assert move.acquired_player is not None or move.relinquished_player is not None, move
+        words = [w.translate(str.maketrans('', '', string.punctuation)).lower() for w in move.notes.split()]
+        if any(title in words for title in non_player_jobs):
+            continue
         if move.relinquished_player is not None:
             yield Relinquishing(move.date, move.team, move.relinquished_player, move.notes)
         else:
@@ -309,10 +377,10 @@ def get_transactions(dt: datetime.date) -> Iterable[PlayerEvent]:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
         if result.acquired_player is not None:
-            assert result.notes.startswith('activated from IL'), result
+            assert result.notes.startswith('activated from I'), result
             yield ILActivation(result.date, result.team, result.acquired_player, result.notes)
         else:
-            assert result.notes.startswith('placed on IL'), result
+            assert result.notes.startswith('placed on I'), result
             yield ILPlacement(result.date, result.team, result.relinquished_player, result.notes)
 
     results = _get_raw_data(dt, PlayerEventCategory.Injuries)
@@ -340,18 +408,42 @@ def get_transactions(dt: datetime.date) -> Iterable[PlayerEvent]:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
         if result.acquired_player is not None:
-            assert result.notes == 'reinstated from suspension', result
+            # "{reinstated,activated} from {suspension,suspended}"
+            tokens = result.notes.split()
+            assert tokens[0] in ('reinstated', 'activated'), result
+            assert tokens[1] == 'from', result
+            assert tokens[2] in ('suspension', 'suspended'), result
             yield ReturnToLineup(result.date, result.team, result.acquired_player, result.notes)
         else:
-            if result.notes.startswith('fined ') or result.notes.startswith('gined '):  # "gined" typo in data
+            tokens = result.notes.split()
+            if any(w in tokens for w in ('fined', 'gined')):  # "gined" = typo in data
                 continue
-            assert result.notes.startswith('suspended '), result
+            if result.notes.find('suspension reduced') != -1:
+                continue
+            assert result.notes.startswith('suspended ') or result.notes.startswith('placed on suspended list'), result
             yield Suspension(result.date, result.team, result.relinquished_player, result.notes)
 
 
-if __name__ == '__main__':
-    dt = datetime.date(2023, 2, 1)
-    for _ in range(300):
-        dt -= datetime.timedelta(days=1)
-        for t in get_transactions(dt):
+#@memory.cache
+def get_player_events_list(dt: datetime.date) -> List[PlayerEvent]:
+    return list(get_player_events_iterable(dt))
+
+
+def get_player_events(dt: datetime.date) -> List[PlayerEvent]:
+    if trust_cached_data_for(dt):
+        return get_player_events_list(dt)
+    else:
+        return list(get_player_events_iterable(dt))
+
+
+def dump_all_player_events():
+    dt = START_DATE
+    today = datetime.date.today()
+    while dt <= today:
+        for t in get_player_events(dt):
             print(t)
+        dt += datetime.timedelta(days=1)
+
+
+if __name__ == '__main__':
+    dump_all_player_events()

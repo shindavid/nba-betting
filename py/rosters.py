@@ -32,9 +32,13 @@ def looks_like_player_name(s: str) -> bool:
     "2029 second round pick (?-?)" -> False
     "cash" -> False
     "Timberwolves option to swap 2024 second round picks with Lakers (?-?)" -> False
+
+    Note that some names have a lower-case "de" in them, e.g. "Remon Van de Hare".
     """
+    if s == 'Nene':
+        return True
     tokens = s.split()
-    return 1 < len(tokens) < 5 and all(t[0].isupper() for t in tokens)
+    return 1 < len(tokens) < 5 and all(t[0].isupper() or t in ('de',) for t in tokens)
 
 
 class PlayerStats:

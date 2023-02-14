@@ -10,6 +10,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 
+class TeamNameParseError(Exception):
+    def __init__(self, team_str: str):
+        super().__init__(f'Could not parse team: {team_str}')
+
+
 @dataclass(eq=True, frozen=True)
 class Team:
     abbrev: str
@@ -34,6 +39,7 @@ class Team:
 
     @staticmethod
     def parse(s: str) -> 'Team':
+        orig_s = s
         s = Team.alternative_abbrevs.get(s.upper(), s)
 
         team = TEAMS_BY_ABBREV.get(s.upper(), None)
@@ -44,7 +50,10 @@ class Team:
         if team is not None:
             return team
 
-        return TEAMS_BY_FULL_NAME[s]
+        team = TEAMS_BY_FULL_NAME.get(s, None)
+        if team is None:
+            raise TeamNameParseError(orig_s)
+        return team
 
     def __repr__(self):
         return f'Team({self.abbrev})'
