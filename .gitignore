@@ -7,3 +7,6 @@ downloads/**
 
 # python cache
 **/__pycache__
+
+# jupyter notebooks
+**/.ipynb_checkpoints
