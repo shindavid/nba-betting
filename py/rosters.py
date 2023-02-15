@@ -38,7 +38,9 @@ def looks_like_player_name(s: str) -> bool:
     if s == 'Nene':
         return True
     tokens = s.split()
-    return 1 < len(tokens) < 5 and all(t[0].isupper() or t in ('de',) for t in tokens)
+
+    # "a" for "Luc Mbah a Moute"
+    return 1 < len(tokens) < 6 and all(t[0].isupper() or t in ('de', 'a') for t in tokens)
 
 
 class PlayerStats:
