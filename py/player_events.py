@@ -14,7 +14,8 @@ import bs4
 from joblib import Memory
 
 import repo
-from rosters import PlayerName, normalize_player_name, looks_like_player_name, RosterData
+from rosters import RosterData
+from players import normalize_player_name, looks_like_player_name, PlayerName
 from teams import Team, TeamNameParseError
 import web
 

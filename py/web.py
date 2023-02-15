@@ -6,17 +6,7 @@ from urllib.parse import urlparse
 import repo
 
 
-def fetch(url: str, force_refresh=False, stale_is_ok=False, verbose=True):
-    """
-    Fetches the text of the given url.
-
-    By default, uses a cached copy of the file if it exists. If the write timestamp of the cached copy is from a
-    previous day, the cache will be updated.
-
-    To force a refresh, set force_refresh=True.
-
-    If you are ok using a cached copy from a previous day, set stale_is_ok=True.
-    """
+def url_to_cached_file(url: str) -> str:
     url_components = urlparse(url)
     assert not url_components.params, url
     assert not url_components.fragment, url
@@ -28,14 +18,48 @@ def fetch(url: str, force_refresh=False, stale_is_ok=False, verbose=True):
         sanitized_query = url_components.query.replace('/', '_').replace('?', '_').replace('&', '_')
         cached_file += f'__{sanitized_query}'
 
-    if not force_refresh and os.path.exists(cached_file):
-        ts = os.path.getmtime(cached_file)
-        dt = datetime.datetime.fromtimestamp(ts)
-        if stale_is_ok or dt.date() >= datetime.datetime.now().date():
-            if verbose:
-                print(f'Using cached copy of {url}')
-            with open(cached_file, 'r') as f:
-                return f.read()
+    return cached_file
+
+
+def check_cached_file(cached_file: str, force_refresh=False, stale_is_ok=False, stale_window_in_days=1) -> bool:
+    """
+    Returns true if the given path exists and is valid.
+    """
+    if force_refresh:
+        return False
+    if not os.path.exists(cached_file):
+        return False
+    if stale_is_ok:
+        return True
+
+    ts = os.path.getmtime(cached_file)
+    dt = datetime.datetime.fromtimestamp(ts)
+    today = datetime.date.today()
+    return dt.date() > today - datetime.timedelta(days=stale_window_in_days)
+
+
+def check_url(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days=1):
+    """
+    Returns true if there is a valid cached copy of the given url.
+    """
+    return check_cached_file(url_to_cached_file(url), force_refresh, stale_is_ok, stale_window_in_days)
+
+
+def fetch(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days=1, verbose=True):
+    """
+    Fetches the text of the given url.
+
+    By default, uses a cached copy of the file if it exists. If the write timestamp of the cached copy is stale, the
+    cached copy is ignored, unless stale_is_ok=True. The definition of "stale" is controlled by stale_window_in_days.
+
+    To force a refresh, set force_refresh=True.
+    """
+    cached_file = url_to_cached_file(url)
+    if check_cached_file(cached_file, force_refresh, stale_is_ok, stale_window_in_days):
+        if verbose:
+            print(f'Using cached copy of {url}')
+        with open(cached_file, 'r') as f:
+            return f.read()
 
     if verbose:
         print(f'Issuing request: {url}')

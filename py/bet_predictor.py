@@ -29,7 +29,8 @@ from typing import Dict, List
 
 from games import get_games, Standings, Game
 from raptor import get_raptor_stats, RaptorStats
-from rosters import RosterData, Roster, PlayerName
+from rosters import RosterData, Roster
+from players import PlayerName
 from teams import *
 
 
