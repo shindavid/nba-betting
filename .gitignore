@@ -10,3 +10,6 @@ downloads/**
 
 # jupyter notebooks
 **/.ipynb_checkpoints
+
+# joblib cache
+joblib_cache
