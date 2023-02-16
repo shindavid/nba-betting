@@ -4,7 +4,7 @@ injuries.
 """
 import calendar
 import datetime
-import string
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, List, Iterable
@@ -14,11 +14,11 @@ import bs4
 from joblib import Memory
 
 import repo
-from rosters import RosterData
-from players import normalize_player_name, looks_like_player_name, PlayerName
-from teams import Team, TeamNameParseError
 import web
-
+from bball_reference import PlayerDirectory, InvalidPlayerException, PlayerMatchException
+from players import normalize_player_name, looks_like_player_name, Player, FakePlayer
+from str_util import strip_punctuation, extract_parenthesized_strs, remove_parenthesized_strs
+from teams import Team, TeamNameParseError
 
 TRANSACTIONS_URL = 'https://prosportstransactions.com/basketball/Search/SearchResults.php'
 LEBRON_JAMES_DRAFT_DATE = datetime.date(2003, 6, 26)
@@ -30,13 +30,9 @@ memory = Memory(repo.joblib_cache(), verbose=0)
 _current_url = None
 
 
-def strip_punctuation(s: str) -> str:
-    return s.translate(str.maketrans('', '', string.punctuation))
-
-
 class PlayerEvent:
     # team = None means that the team no longer exists (e.g., Sonics)
-    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: Player, notes: str):
         self.date = date
         self.team = team
         self.player = player
@@ -47,7 +43,7 @@ class Acquisition(PlayerEvent):
     """
     An Acquisition is a transaction that adds a player to a team, by signing, trade, or draft.
     """
-    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: Player, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -58,7 +54,7 @@ class Relinquishing(PlayerEvent):
     """
     A Relinquishing is a transaction that removes a player from a team, either via trade or waiver.
     """
-    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: Player, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -69,7 +65,7 @@ class ILPlacement(PlayerEvent):
     """
     An ILPlacement is a transaction that places a player on the Injured List.
     """
-    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: Player, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -80,7 +76,7 @@ class ILActivation(PlayerEvent):
     """
     An ILActivation is a transaction that activates a player from the Injured List.
     """
-    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: Player, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -91,7 +87,7 @@ class MissedGame(PlayerEvent):
     """
     A MissedGame is a transaction that indicates a player missed a game due to injury, personal reason, or suspension.
     """
-    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: Player, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -102,7 +98,7 @@ class Suspension(PlayerEvent):
     """
     A Suspension is a transaction that indicates a player was suspended for 1 or more games.
     """
-    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: Player, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -116,7 +112,7 @@ class ReturnToLineup(PlayerEvent):
 
     TODO: merge with ILActivation?
     """
-    def __init__(self, date: datetime.date, team: Optional[Team], player: str, notes: str):
+    def __init__(self, date: datetime.date, team: Optional[Team], player: Player, notes: str):
         super().__init__(date, team, player, notes)
 
     def __str__(self):
@@ -135,8 +131,8 @@ class PlayerEventCategory(Enum):
 class RawPlayerEventData:
     date: datetime.date
     team: Team
-    acquired_player: Optional[PlayerName]
-    relinquished_player: Optional[PlayerName]
+    acquired_player: Optional[Player]
+    relinquished_player: Optional[Player]
     notes: str
 
 
@@ -148,7 +144,7 @@ class PlayerNameExtractionError(Exception):
         super().__init__(msg)
 
 
-def extract_player_names(html_str: str) -> Iterable[PlayerName]:
+def extract_players(directory: PlayerDirectory, html_str: str) -> Iterable[Player]:
     """
     Accepts a string from either the "Acquired" or "Relinquished" column of the search results page. Parses a list of
     players from the string and returns them.
@@ -173,8 +169,8 @@ def extract_player_names(html_str: str) -> Iterable[PlayerName]:
     "(William) Tony Parker"
     "Michael Smith (John) (Providence)"
 
-    In these cases, the multiple names are checked against the names in RosterData (fetched from nbastuffer.com). If
-    one of them match, that one is returned. Otherwise, the first name provided is returned.
+    In these cases, the multiple names are checked against the names in basketball-reference.com. If exactly
+    one of them match, that one is returned. Else, returns a FakePlayer with the name as it appears on the website.
 
     BIRTHDATE CLARIFIERS
 
@@ -183,17 +179,11 @@ def extract_player_names(html_str: str) -> Iterable[PlayerName]:
 
     Brandon Williams (b. 1975-02-27)
 
-    I am not sure how to handle this at present, as nbastuffer.com does not provide birthdates. Just ignoring the
-    birthdates for now. This might lead to different players getting mapped to the same name.
-
     CHARACTER CODES:
 
     Some players, the website disambiguates collisions by adding a single character identifier in parentheses:
 
     "Mike Smith (b)"
-
-    Like with birthdates, I'm just ignoring for now. This might lead to different players getting mapped to the same
-    name.
     """
     if not html_str:
         return []
@@ -216,72 +206,154 @@ def extract_player_names(html_str: str) -> Iterable[PlayerName]:
                         'rights',
                         'select',
                         )
+
+    # some players were traded/released but never played a game, and so are missing from
+    # basketball-reference.com
+    #
+    # Most such players are caught elsewhere by checking "drafted" and "waived", but some slip by. Those players
+    # are explicitly listed here.
+    players_who_never_played = (
+        'Danny Forston',
+        'Livan Pyfrom',
+        'Josh Moore',
+        'Jon Stefansson',
+        'Chris Marcus',
+        '(Sean) Chris Smith',
+    )
+
+    disambiguation_special_cases0 = {
+        'Roy Devyn Marble / Roy Marble (Devyn)': 'Devyn Marble',
+        'Etorre Messina (P) / Ettore Messina (SN)': 'Etorre Messina',
+        'Ruben Nembhard / R.J. Nembhard Jr.': ''
+    }
+
+    disambiguation_special_cases1 = {
+        ('Ken Johnson', 'Allen'): datetime.date(1978, 2, 1),
+        ('Mike James', 'Lamont'): datetime.date(1975, 6, 23),
+        ('Mike Dunleavy', 'Sr.'): datetime.date(1954, 3, 21),
+        ('Luke Jackson', 'Ryan'): datetime.date(1981, 11, 6),
+        ('Charles Smith', 'Cornelius'): datetime.date(1975, 8, 22),
+        ('Cedric Henderson', 'Earl'): datetime.date(1975, 3, 11),
+        ('Marcus Williams', 'D.'): datetime.date(1985, 12, 3),
+        ('Marcus Williams', 'Eliot'): datetime.date(1986, 11, 18),
+        ('Bobby Jones', 'Ray'): datetime.date(1984, 1, 9),
+        ('Mike Smith', 'b'): datetime.date(1976, 4, 15),
+        ('Jerry Smith', 'b'): datetime.date(1987, 9, 26),
+        ('Mike Scott', 'James'): datetime.date(1988, 7, 16),
+        ('Tony Mitchell', 'LaShae'): datetime.date(1992, 4, 7),
+        ('Brandon Williams', 'D.'): datetime.date(1975, 2, 27),
+        ('Justin Jackson', 'Aaron'): datetime.date(1995, 3, 28),
+        ('Mike James', 'Perry'): datetime.date(1990, 8, 18),
+    }
+
+    disambiguation_special_cases2 = {
+        'Kenyon Martin Sr': ('Kenyon Martin', datetime.date(1977, 12, 30)),
+        'Mike Dunleavy Jr': ('Mike Dunleavy', datetime.date(1980, 9, 15)),
+    }
+
+    disambiguation_special_cases3 = {
+        'Jeffery Taylor': ('Jeff Taylor', datetime.date(1989, 5, 23)),
+        'Jeff Taylor': ('Jeff Taylor', datetime.date(1989, 5, 23)),
+        'Daniel Nwaelele': ('Daniel Nwaelele', None),
+        'Dan Nwaelele': ('Daniel Nwaelele', None),
+    }
+
     dot = '•'
     tokens = [t.strip() for t in html_str.split(dot) if t]
-    all_player_names = RosterData.get_all_player_names()
     for t in tokens:
+        if True:
+            yield normalize_player_name(t)
+            continue
+
         subtokens = [strip_punctuation(w) for w in t.split()]
         non_player = any(t in non_player_terms for t in subtokens)
         if non_player:
             continue
 
-        raw_names = [n.strip() for n in t.split('/')]
-        names = []
+        if t in players_who_never_played:
+            continue
+
+        t = disambiguation_special_cases0.get(t, t)
+
+        parenthesized_strs = tuple(extract_parenthesized_strs(t))
+        unparenthesized_str = remove_parenthesized_strs(t)
+        raw_names = [n.strip() for n in unparenthesized_str.split('/')]
+        name_birthdates = []
         for name in raw_names:
-            if name.find('(') == -1:
-                names.append(name)
+            if not parenthesized_strs:
+                name_birthdates.append((name, None))
                 continue
 
-            # Justin Jackson (Aaron)
-            # Brandon Williams (b. 1975-02-27)
-            # (William) Tony Parker
+            primary_name = name
 
-            # splice out the parenthesized part
-            primary_name = ' '.join((name[:name.find('(')] + name[name.rfind(')') + 1:]).split())
-
-            names.append(primary_name)
+            birthdate = None
             if not primary_name:
                 raise PlayerNameExtractionError(html_str, name)
             last_name = primary_name.split()[-1]
-            if len(primary_name.split()) != 2:
-                raise PlayerNameExtractionError(html_str, name)
 
-            alternate_first_name = name[name.find('(') + 1:name.find(')')]
-            if alternate_first_name.startswith('b. '):
-                # this is a birthdate disambiguation, ignore it for now
-                pass
-            elif len(alternate_first_name) == 1 and alternate_first_name.islower():
-                # this is a character code disambiguation, ignore it for now
-                pass
-            elif alternate_first_name.startswith('changed to '):
-                # Marcus Banks (changed to Jumaine Jones on 2004-08-13)
-                pass
-            elif alternate_first_name in ('CBC E', 'CBS NBA P R S',):  # weird case for "Daniel Nwaelele"
-                pass
-            else:
-                names.append(f'{alternate_first_name} {last_name}')
+            if primary_name in disambiguation_special_cases3:
+                primary_name, birthdate = disambiguation_special_cases3[primary_name]
+            elif len(parenthesized_strs) > 1:
+                if parenthesized_strs == ('John', 'Providence'):
+                    birthdate = datetime.date(1972, 3, 28)
+            elif parenthesized_strs:
+                alternate_first_name = parenthesized_strs[0]
+                if alternate_first_name.startswith('b. '):
+                    # birthdate disambiguation
+                    birthdate = datetime.datetime.strptime(alternate_first_name[3:], '%Y-%m-%d').date()
+                elif alternate_first_name.startswith('changed to '):
+                    # Marcus Banks (changed to Jumaine Jones on 2004-08-13)
+                    pass
+                elif alternate_first_name in ('CBC E', 'CBS NBA P R S',):  # weird case for "Daniel Nwaelele"
+                    pass
+                elif (primary_name, alternate_first_name) in disambiguation_special_cases1:
+                    birthdate = disambiguation_special_cases1[(primary_name, alternate_first_name)]
+                elif len(alternate_first_name) == 1 and alternate_first_name.islower():
+                    continue
+                else:
+                    name_birthdates.append((f'{alternate_first_name} {last_name}', None))
+            name_birthdates.append((primary_name, birthdate))
 
-        names = [normalize_player_name(n) for n in names]
-
-        for name in names:
+        name_birthdates = [(normalize_player_name(n), b) for n, b in name_birthdates]
+        name_birthdates = [disambiguation_special_cases2.get(n, (n, b)) for n, b in name_birthdates]
+        name_birthdates = list(set(name_birthdates))
+        for name, _ in name_birthdates:
             if not looks_like_player_name(name):
                 raise PlayerNameExtractionError(html_str, name)
 
-        if len(names) == 1:
-            yield names[0]
+        if len(name_birthdates) == 1:
+            name, birthdate = name_birthdates[0]
+            try:
+                yield directory.get(name, birthdate)
+            except PlayerMatchException as e:
+                if name in players_who_never_played:
+                    continue
+                return FakePlayer(name)
             continue
 
         # multiple names, look for one that matches RosterData
-        matched_names = [n for n in names if n in all_player_names]
-        if not matched_names:
-            yield names[0]
-            continue
-        if len(matched_names) > 1:
-            raise PlayerNameExtractionError(html_str, f'Multiple names matched: {matched_names} for "{t}"')
-        yield matched_names[0]
+        matches = []
+        omit_count = 0
+        for name, birthdate in name_birthdates:
+            try:
+                matches.append(directory.get(name, birthdate))
+            except InvalidPlayerException as e:
+                # if name in players_who_never_played:
+                #     omit_count += 1
+                #     continue
+                continue
+
+        if not matches:
+            if omit_count:
+                continue
+            return FakePlayer(raw_names)
+
+        if len(matches) > 1:
+            raise PlayerNameExtractionError(html_str, f'Multiple names matched: {matches} for "{t}" [{name_birthdates}]')
+        yield matches[0]
 
 
-def _get_raw_data(start_dt: datetime.date, end_dt: datetime.date,
+def _get_raw_data(start_dt: datetime.date, end_dt: datetime.date, directory: PlayerDirectory,
                   category: PlayerEventCategory) -> List[RawPlayerEventData]:
     category_str = category.value
     start_dt_str = start_dt.strftime('%Y-%m-%d')
@@ -294,14 +366,18 @@ def _get_raw_data(start_dt: datetime.date, end_dt: datetime.date,
     }
 
     url = f'{TRANSACTIONS_URL}?{urlencode(params)}'
-    return list(_get_raw_data_from_url(url, start_dt, end_dt))
+    return list(_get_raw_data_from_url(url, start_dt, end_dt, directory))
 
 
 def trust_cached_data_for(dt: datetime.date) -> bool:
     return dt < datetime.date.today() - datetime.timedelta(days=CACHE_HOT_DAYS)
 
 
-def _get_raw_data_from_url(url, start_dt: datetime.date, end_dt: datetime.date) -> Iterable[RawPlayerEventData]:
+DEBUG = defaultdict(set)
+
+
+def _get_raw_data_from_url(url, start_dt: datetime.date, end_dt: datetime.date,
+                           directory: PlayerDirectory) -> Iterable[RawPlayerEventData]:
     global _current_url
     _current_url = url
 
@@ -332,12 +408,25 @@ def _get_raw_data_from_url(url, start_dt: datetime.date, end_dt: datetime.date) 
             continue
 
         notes = tokens[4]
+
+        acquired_players = list(extract_players(directory, tokens[2]))
+        relinquished_players = list(extract_players(directory, tokens[3]))
+        for p in acquired_players + relinquished_players:
+            try:
+                q = directory.get(p)
+            except PlayerMatchException as e:
+                DEBUG[p].add(notes)
+
+        if True:
+            continue
+
         aux_phrases = ('transfer of ownership',
                        'purchased team',
                        'hired as president',
                        'agreement reached for transfer',
+                       'general manager',
                        'owner deceased',)
-        if any(notes.startswith(p) for p in aux_phrases):
+        if any(notes.find(p) != -1 for p in aux_phrases):
             continue
 
         if tokens[2] == '• Marion Hillard' and date == datetime.date(2017, 11, 5):
@@ -360,7 +449,7 @@ def _get_raw_data_from_url(url, start_dt: datetime.date, end_dt: datetime.date) 
                 raise e
 
         try:
-            acquired_players = list(extract_player_names(tokens[2]))
+            acquired_players = list(extract_players(directory, tokens[2]))
         except PlayerNameExtractionError as e:
             # some known bugs in data
             if date == datetime.date(2018, 4, 1) and tokens[2].endswith(' Cavaliers'):
@@ -372,7 +461,7 @@ def _get_raw_data_from_url(url, start_dt: datetime.date, end_dt: datetime.date) 
             raise e
 
         try:
-            relinquished_players = list(extract_player_names(tokens[3]))
+            relinquished_players = list(extract_players(directory, tokens[3]))
         except PlayerNameExtractionError as e:
             # some known bugs in data
             if date == datetime.date(2023, 1, 6) and tokens[3].find(' strained left quadriceps ') > -1:
@@ -389,6 +478,34 @@ def _get_raw_data_from_url(url, start_dt: datetime.date, end_dt: datetime.date) 
                 continue
             raise e
 
+        if any(isinstance(p, FakePlayer) for p in acquired_players):
+            phrases = ('round pick',  # drafted but never played
+                       'signed free agent',  # signed but never played
+                       'assistant coach',
+                       'head coach',
+                       'general manager',
+                       'director',
+                       'athletic trainer',
+                       'hired as ',
+                       'promoted to ',
+                       )
+            assert any(notes.find(p) != -1 for p in phrases), acquired_players
+            acquired_players = []
+
+        if any(isinstance(p, FakePlayer) for p in relinquished_players):
+            phrases = ('assistant coach',
+                       'head coach',
+                       'general manager',
+                       'director',
+                       'president',
+                       'athletic trainer',
+                       'fired as ',
+                       'demoted ',
+                       'waived',  # likely never played a game in the NBA
+                       )
+            assert any(notes.find(p) != -1 for p in phrases), relinquished_players
+            relinquished_players = []
+
         for acquired_player in acquired_players:
             yield RawPlayerEventData(date, team, acquired_player, None, notes)
         for relinquished_player in relinquished_players:
@@ -399,16 +516,18 @@ def _get_raw_data_from_url(url, start_dt: datetime.date, end_dt: datetime.date) 
     for tag in next_tags:
         href = tag['href']
         query_str = href[href.find('?'):]
-        yield from _get_raw_data_from_url(f'{TRANSACTIONS_URL}{query_str}', start_dt, end_dt)
+        yield from _get_raw_data_from_url(f'{TRANSACTIONS_URL}{query_str}', start_dt, end_dt, directory)
 
 
 def get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -> Iterable[PlayerEvent]:
     """
     Returns all player events on the given date.
     """
+    directory = PlayerDirectory.instance()
+
     non_player_jobs = ('coach', 'manager', 'gm', 'president', 'owner', 'advisor', 'director', 'coordinator', 'scout',
                        'executive', 'trainer', 'assistant', 'vp', 'ownership')
-    moves = _get_raw_data(start_dt, end_dt, PlayerEventCategory.PlayerMovement)
+    moves = _get_raw_data(start_dt, end_dt, directory, PlayerEventCategory.PlayerMovement)
     for move in moves:
         assert None in (move.acquired_player, move.relinquished_player), move
         assert move.acquired_player is not None or move.relinquished_player is not None, move
@@ -416,16 +535,19 @@ def get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -
         if any(title in words for title in non_player_jobs):
             continue
         if move.relinquished_player is not None:
+            assert not isinstance(move.relinquished_player, FakePlayer), move
             yield Relinquishing(move.date, move.team, move.relinquished_player, move.notes)
         else:
+            assert not isinstance(move.acquired_player, FakePlayer), move
             yield Acquisition(move.date, move.team, move.acquired_player, move.notes)
 
-    results = _get_raw_data(start_dt, end_dt, PlayerEventCategory.IL)
+    results = _get_raw_data(start_dt, end_dt, directory, PlayerEventCategory.IL)
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
         notes = result.notes
         if result.acquired_player is not None:
+            assert not isinstance(result.acquired_player, FakePlayer), result
             tokens = notes.split()
             if notes.startswith('placed on IL') or notes.find('(out indefinitely)') != -1:
                 # website bug, this is mis-categorized as an activation
@@ -433,13 +555,14 @@ def get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -
                 continue
             if notes == 'IL':
                 # website data issue, this is James Harden reactivation
-                assert result.date == datetime.date(2018, 11, 3) and result.acquired_player == 'James Harden', result
+                assert result.date == datetime.date(2018, 11, 3) and result.acquired_player.name == 'James Harden', result
             elif notes.startswith('player returned to team'):
-                assert result.date == datetime.date(2019, 1, 22) and result.acquired_player == 'Carmelo Anthony', result
+                assert result.date == datetime.date(2019, 1, 22) and result.acquired_player.name == 'Carmelo Anthony', result
             else:
                 assert tokens[0].find('activated') != -1 or notes.startswith('returned '), result
             yield ILActivation(result.date, result.team, result.acquired_player, result.notes)
         else:
+            assert not isinstance(result.relinquished_player, FakePlayer), result
             if notes.find('(DNP)') != -1:
                 # website bug, this is mis-categorized as a placement on IL
                 yield MissedGame(result.date, result.team, result.relinquished_player, result.notes)
@@ -463,11 +586,12 @@ def get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -
                             notes.find('(out for season)') != -1]), result
             yield ILPlacement(result.date, result.team, result.relinquished_player, result.notes)
 
-    results = _get_raw_data(start_dt, end_dt, PlayerEventCategory.Injuries)
+    results = _get_raw_data(start_dt, end_dt, directory, PlayerEventCategory.Injuries)
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
         if result.acquired_player is not None:
+            assert not isinstance(result.acquired_player, FakePlayer), result
             tokens = [strip_punctuation(w).lower() for w in result.notes.split()]
             if result.notes.find('(out for season)') != -1:
                 # website bug, this is mis-categorized as a return from IL
@@ -483,26 +607,30 @@ def get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -
             assert any(result.notes.startswith(p) for p in phrases), result
             yield ReturnToLineup(result.date, result.team, result.acquired_player, result.notes)
         else:
+            assert not isinstance(result.relinquished_player, FakePlayer), result
             yield MissedGame(result.date, result.team, result.relinquished_player, result.notes)
 
-    results = _get_raw_data(start_dt, end_dt, PlayerEventCategory.Personal)
+    results = _get_raw_data(start_dt, end_dt, directory, PlayerEventCategory.Personal)
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
         if result.acquired_player is not None:
+            assert not isinstance(result.acquired_player, FakePlayer), result
             if result.notes.startswith('returned as head coach'):
                 continue
             phrases = ('returned to lineup', 'activated from IL',)
             assert any(result.notes.startswith(p) for p in phrases), result
             yield ReturnToLineup(result.date, result.team, result.acquired_player, result.notes)
         else:
+            assert not isinstance(result.relinquished_player, FakePlayer), result
             yield MissedGame(result.date, result.team, result.relinquished_player, result.notes)
 
-    results = _get_raw_data(start_dt, end_dt, PlayerEventCategory.Disciplinary)
+    results = _get_raw_data(start_dt, end_dt, directory, PlayerEventCategory.Disciplinary)
     for result in results:
         assert None in (result.acquired_player, result.relinquished_player), result
         assert result.acquired_player is not None or result.relinquished_player is not None, result
         if result.acquired_player is not None:
+            assert not isinstance(result.acquired_player, FakePlayer), result
             tokens = [strip_punctuation(w) for w in result.notes.split()]
             if tokens[0] == 'suspended':
                 # website bug, this is mis-categorized as a return to lineup
@@ -527,6 +655,7 @@ def get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -
                     raise Exception(result)
             yield ReturnToLineup(result.date, result.team, result.acquired_player, result.notes)
         else:
+            assert not isinstance(result.relinquished_player, FakePlayer), result
             tokens = result.notes.split()
             if any(w in tokens for w in ('fined', 'gined')):  # "gined": typo in data
                 continue
@@ -580,7 +709,7 @@ def _get_player_events_list_helper(start_dt: datetime.date, end_dt: datetime.dat
         raise e
 
 
-@memory.cache
+# @memory.cache
 def get_player_events_list(start_dt: datetime.date, end_dt: datetime.date) -> List[PlayerEvent]:
     return _get_player_events_list_helper(start_dt, end_dt)
 
@@ -599,7 +728,8 @@ def get_all_player_events() -> Iterable[PlayerEvent]:
     last_untrusted_dt = today - datetime.timedelta(days=CACHE_HOT_DAYS)
     last_batch_dt = last_untrusted_dt.replace(day=1) - datetime.timedelta(days=1)
 
-    dt = START_DATE
+    dt = datetime.date(2018, 9, 1)
+#    dt = START_DATE
     while dt <= last_batch_dt:
         start_dt = dt
         end_dt = dt.replace(day=calendar.monthrange(dt.year, dt.month)[1])
@@ -611,3 +741,16 @@ def get_all_player_events() -> Iterable[PlayerEvent]:
         for t in get_player_events(dt, dt):
             yield t
         dt += datetime.timedelta(days=1)
+
+    directory = PlayerDirectory.instance()
+    for p, notes_set in DEBUG.items():
+        candidates = directory.get_candidate_matches(p)
+        for notes in notes_set:
+            print(f'# {notes}')
+
+        if not candidates:
+            print(f'EXCEPTIONS["{p}"] = None')
+        else:
+            for candidate in candidates:
+                print(f'EXCEPTIONS["{p}"] = {repr(candidate)}')
+        print('')

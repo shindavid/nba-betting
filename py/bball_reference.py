@@ -2,8 +2,8 @@
 Provides utilities to download and parse data from basketball-reference.com.
 """
 import datetime
-from collections import defaultdict
-from typing import Iterable, List, Dict, Optional, Set
+from collections import defaultdict, Counter
+from typing import Iterable, List, Dict, Optional, Set, Union
 
 import bs4
 from joblib import Memory
@@ -11,6 +11,7 @@ from joblib import Memory
 from players import Player, normalize_player_name, PlayerName
 import repo
 import web
+from str_util import extract_parenthesized_strs, remove_parenthesized_strs
 from web import check_url
 
 BASKETBALL_REFERENCE_URL = 'https://www.basketball-reference.com'
@@ -64,19 +65,25 @@ def get_all_players() -> List[Player]:
     return list(_get_all_players_iterable())
 
 
-class InvalidPlayerException(Exception):
-    def __init__(self, name: PlayerName, birthdate: Optional[datetime.date] = None,
+class PlayerMatchException(Exception):
+    pass
+
+
+class InvalidPlayerException(PlayerMatchException):
+    def __init__(self, name: Union[PlayerName, List[PlayerName]], birthdate: Optional[datetime.date] = None,
                  valid_birthdates: Optional[Set[datetime.date]] = None):
-        msg = f'No player named {name}'
+        names = name if isinstance(name, list) else [name]
+        msg = f'No player named {" or ".join(names)}'
         if birthdate is not None:
             msg += f' with birthdate {birthdate.strftime("%Y-%m-%d")}'
             if valid_birthdates:
                 valid_birthdates_str = ', '.join(d.strftime('%Y-%m-%d') for d in sorted(valid_birthdates))
                 msg += f' (valid birthdates: {valid_birthdates_str})'
         super().__init__(msg)
+        self.names = names
 
 
-class AmbiguousPlayerException(Exception):
+class AmbiguousPlayerException(PlayerMatchException):
     def __init__(self, name: PlayerName, valid_birthdates: Set[datetime.date]):
         msg = f'Multiple players in NBA history named "{name}", birthdate disambiguation required'
         valid_birthdates_str = ', '.join(d.strftime('%Y-%m-%d') for d in sorted(valid_birthdates))
@@ -85,13 +92,50 @@ class AmbiguousPlayerException(Exception):
 
 
 class PlayerDirectory:
+    _instance = None
+
+    @staticmethod
+    def instance() -> 'PlayerDirectory':
+        if PlayerDirectory._instance is None:
+            PlayerDirectory._instance = PlayerDirectory()
+        return PlayerDirectory._instance
+
     def __init__(self):
+        self._fragments_lookup: Dict[str, List[Player]] = defaultdict(list)
         self._lookup: Dict[PlayerName, Dict[datetime.date, Player]] = defaultdict(dict)
         for player in get_all_players():
             subdict = self._lookup[player.name]
             if player.birthdate in subdict:
                 raise Exception(f'Duplicate player: {player}')
             subdict[player.birthdate] = player
+            for fragment in player.name.split():
+                self._fragments_lookup[fragment].append(player)
+
+    def get_candidate_matches(self, name: PlayerName) -> List[Player]:
+        """
+        Finds best-attempt matches for the given name.
+        """
+        parenthesized_strs = list(extract_parenthesized_strs(name))
+        name_tokens = remove_parenthesized_strs(name).split()
+
+        if len(parenthesized_strs) == 0 and '/' not in name_tokens:
+            # This is a vanilla name, so we should try a direct lookup
+            normalized_name = normalize_player_name(name)
+            subdict = self._lookup.get(normalized_name, None)
+            if subdict is not None:
+                return list(subdict.values())
+
+        tokens = set(name_tokens + parenthesized_strs)
+        counts: Counter[Player] = Counter()
+        for token in tokens:
+            token = normalize_player_name(token)
+            for player in self._fragments_lookup[token]:
+                counts[player] += 1
+
+        if not counts:
+            return []
+        max_count = max(counts.values())
+        return [p for p, c in counts.items() if c == max_count]
 
     def get(self, name: PlayerName, birthdate: Optional[datetime.date] = None) -> Player:
         subdict = self._lookup.get(name, None)
@@ -110,7 +154,3 @@ class PlayerDirectory:
             raise InvalidPlayerException(name, birthdate, set(subdict.keys()))
 
         return player
-
-
-if __name__ == '__main__':
-    directory = PlayerDirectory()
