@@ -1,5 +1,8 @@
 import datetime
 import os
+import time
+from typing import Optional
+
 import requests
 from urllib.parse import urlparse
 
@@ -45,7 +48,7 @@ def check_url(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_
     return check_cached_file(url_to_cached_file(url), force_refresh, stale_is_ok, stale_window_in_days)
 
 
-def fetch(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days=1, verbose=True):
+def fetch(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days=1, verbose=True, pause_sec=1):
     """
     Fetches the text of the given url.
 
@@ -53,6 +56,11 @@ def fetch(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days
     cached copy is ignored, unless stale_is_ok=True. The definition of "stale" is controlled by stale_window_in_days.
 
     To force a refresh, set force_refresh=True.
+
+    pause_sec is the number of seconds to pause between requests. This is to avoid hammering the server. Specifically,
+    basketball-reference.com has a 20-requests-per-minute limit, a violation of which lands your session in jail for
+    an hour (https://www.sports-reference.com/bot-traffic.html). The default of 1sec I'm using here technically violates
+    that limit, but I'm hoping that the server will be lenient.
     """
     cached_file = url_to_cached_file(url)
     if check_cached_file(cached_file, force_refresh, stale_is_ok, stale_window_in_days):
@@ -62,7 +70,9 @@ def fetch(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days
             return f.read()
 
     if verbose:
-        print(f'Issuing request: {url}')
+        print(f'Issuing request (after {pause_sec}sec pause): {url}')
+
+    time.sleep(pause_sec)
     response = requests.get(url)
     response.raise_for_status()
     os.makedirs(os.path.dirname(cached_file), exist_ok=True)
