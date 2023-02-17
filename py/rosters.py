@@ -140,10 +140,10 @@ def _get_rosters() -> Dict[Team, Roster]:
             player_stats_dict[name].update(int(columns[gp_index]), float(columns[mpg_index]))
 
     player_moves = {
-        'Kevin Durant': teams.PHX,
-        'TJ Warren': teams.PHX,
-        'Mikal Bridges': teams.BKN,
-        'Cameron Johnson': teams.BKN,
+        'Kevin Durant': teams.PHO,
+        'TJ Warren': teams.PHO,
+        'Mikal Bridges': teams.BRK,
+        'Cameron Johnson': teams.BRK,
 
         'Russell Westbrook': teams.UTA,
         'Juan Toscano-Anderson': teams.UTA,

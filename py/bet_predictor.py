@@ -34,8 +34,8 @@ from players import PlayerName
 from teams import *
 
 
-DAVID_TEAMS = [ MIL, PHX, DAL, MIA, PHI, CLE, CHI, LAC, POR, NYK, CHA, IND, SAC, OKC, HOU ]
-CHRIS_TEAMS = [ GSW, MEM, BOS, BKN, DEN, UTA, MIN, NOP, ATL, TOR, LAL, SAS, WAS, ORL, DET ]
+DAVID_TEAMS = [MIL, PHO, DAL, MIA, PHI, CLE, CHI, LAC, POR, NYK, CHO, IND, SAC, OKC, HOU]
+CHRIS_TEAMS = [GSW, MEM, BOS, BRK, DEN, UTA, MIN, NOP, ATL, TOR, LAL, SAS, WAS, ORL, DET]
 
 
 class MinutesProjectionMethod(Enum):
