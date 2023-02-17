@@ -18,10 +18,10 @@ def url_to_cached_file(url: str) -> str:
         cached_file = cached_file[:-1]
 
     if url_components.query:
-        sanitized_query = url_components.query.replace('/', '_').replace('?', '_').replace('&', '_')
+        sanitized_query = url_components.query.replace('/', '_').replace('?', '_').replace('&', '_').replace('=', '_')
         cached_file += f'__{sanitized_query}'
 
-    return cached_file
+    return cached_file + '.cache'
 
 
 def check_cached_file(cached_file: str, force_refresh=False, stale_is_ok=False, stale_window_in_days=1) -> bool:
