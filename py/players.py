@@ -8,14 +8,15 @@ PlayerName = str
 
 
 class Player:
-    def __init__(self, name: str, birthdate: datetime.date, url: str):
+    def __init__(self, name: str, birthdate: datetime.date, active: bool, url: str):
         self.name = name
         self.birthdate = birthdate
+        self.active = active
         self.url = url
 
     def __repr__(self):
         dt_str = f'datetime.date({self.birthdate.year}, {self.birthdate.month}, {self.birthdate.day})'
-        return f'Player("{self.name}", {dt_str}, "{self.url}")'
+        return f'Player("{self.name}", {dt_str}, {self.active}, "{self.url}")'
 
     def __str__(self):
         return self.name
@@ -31,7 +32,7 @@ class FakePlayer(Player):
     def __init__(self, name: Union[str, List[str]]):
         names = name if isinstance(name, list) else [name]
         name_str = ' or '.join(names)
-        super().__init__(name_str, datetime.date(1900, 1, 1), '')
+        super().__init__(name_str, datetime.date(1900, 1, 1), False, '')
         self.names = names
 
 

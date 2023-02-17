@@ -9,6 +9,40 @@ from urllib.parse import urlparse
 import repo
 
 
+def uncomment_commented_out_sections(html: str, url: str, limit: Optional[int] = None) -> str:
+    """
+    basketball-reference.com weirdly has various sections of the HTML commented out with <!-- and -->, with those
+    comment markers living in standalone lines. Those commented out sections contain required data. I believe the
+    website dynamically activates/deactivates those sections via javascript. This function removes those comments,
+    so that the bs4 parser parses those sections.
+
+    If limit is set, then asserts that the number of uncommented sections is less than or equal to limit.
+
+    The url is passed in solely to relay in debug messages.
+    """
+    lines = html.splitlines()
+    comment_line_numbers = [i for i, line in enumerate(lines) if line.strip() == '<!--']
+    uncomment_line_numbers = [i for i, line in enumerate(lines) if line.strip() == '-->']
+
+    assert len(uncomment_line_numbers) == len(comment_line_numbers), url
+    if limit is not None:
+        assert len(uncomment_line_numbers) <= limit, url
+
+    if not comment_line_numbers:
+        return html
+
+    new_lines = []
+    i = -1
+    for a, b in zip(comment_line_numbers, uncomment_line_numbers):
+        assert a < b, url
+        new_lines.extend(lines[i+1:a])
+        new_lines.extend(lines[a+1:b])
+        i = b
+
+    new_lines.extend(lines[i+1:])
+    return '\n'.join(new_lines)
+
+
 def url_to_cached_file(url: str) -> str:
     url_components = urlparse(url)
     assert not url_components.params, url
