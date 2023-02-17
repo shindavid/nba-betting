@@ -26,17 +26,36 @@ FIRST_FULL_SEASON_POST_NBA_ABA_MERGER: Season = 1977
 memory = Memory(repo.joblib_cache(), verbose=0)
 
 
+INACTIVE_REASONS = {
+    'Inactive',
+    'Did Not Dress',
+    'Not With Team',
+    'Player Suspended',
+}
+
+
 class GameLog:
     def __init__(self, player: Player, tag: bs4.element.Tag):
         self.player = player
         self.minutes = 0
+        self.game = None
+        self.inactive = False
+        self.dnp = False
 
         game_directory = GameDirectory.instance()
 
         td_list = tag.find_all('td')
 
         reason_tds = [td for td in td_list if td.get('data-stat', None) == 'reason']
-        self.inactive = bool(reason_tds)
+        if reason_tds:
+            assert len(reason_tds) == 1, (player, tag)
+            reason = reason_tds[0].text
+            if reason in INACTIVE_REASONS:
+                self.inactive = True
+            elif reason == 'Did Not Play':
+                self.dnp = True
+            else:
+                raise ValueError(reason)
 
         mp_tds = [td for td in td_list if td.get('data-stat', None) == 'mp']
         if mp_tds:
