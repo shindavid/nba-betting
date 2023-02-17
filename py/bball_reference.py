@@ -9,10 +9,9 @@ from typing import Iterable, List, Dict, Optional, Set, Union
 import bs4
 from joblib import Memory
 
-from games import Game
-from players import Player, normalize_player_name, PlayerName
 import repo
 import web
+from players import Player, normalize_player_name, PlayerName
 from str_util import extract_parenthesized_strs, remove_parenthesized_strs
 from teams import Team
 from web import check_url
@@ -34,13 +33,73 @@ INACTIVE_REASONS = {
 }
 
 
+class GameType(Enum):
+    REGULAR_SEASON = 1
+    PLAYOFFS = 2
+
+
+class GameData:
+    def __init__(self, dt: datetime.date, game_type: GameType, home_team: Team, away_team: Team,
+                 home_score: Optional[int] = None, away_score: Optional[int] = None):
+        self.dt = dt
+        self.game_type = game_type
+        self.home_team = home_team
+        self.away_team = away_team
+        self.home_score = home_score
+        self.away_score = away_score
+        self.home_team_days_rest: Optional[int] = None
+        self.away_team_days_rest: Optional[int] = None
+
+    def __eq__(self, other: 'GameData'):
+        return (self.dt, self.home_team, self.away_team) == (other.dt, other.home_team, other.away_team)
+
+    def __hash__(self):
+        return hash((self.dt, self.home_team, self.away_team))
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self.dt}, {self.game_type}, {self.home_team}, {self.away_team}, {self.home_score}, {self.away_score})'
+
+    def __str__(self):
+        return f'{self.away_team}@{self.home_team} on {self.dt.strftime("%Y-%m-%d")}'
+
+    def set_days_rest(self, team: Team, days_rest: int):
+        assert days_rest >= 0, (self, team, days_rest)
+        if team == self.home_team:
+            self.home_team_days_rest = days_rest
+        elif team == self.away_team:
+            self.away_team_days_rest = days_rest
+        else:
+            raise ValueError(f'Unknown team: {team}')
+
+    @property
+    def completed(self) -> bool:
+        return self.home_score is not None
+
+    @property
+    def winning_team(self) -> Optional[Team]:
+        return None if not self.completed else self.home_team if self.home_score > self.away_score else self.away_team
+
+    @property
+    def losing_team(self) -> Optional[Team]:
+        return None if not self.completed else self.away_team if self.home_score > self.away_score else self.home_team
+
+
 class GameLog:
-    def __init__(self, player: Player, tag: bs4.element.Tag):
+    def __init__(self, player: Player, tag: Optional[bs4.element.Tag] = None, game: Optional[GameData] = None):
+        """
+        Pass tag for normal construction.
+
+        In early NBA seasons, when players were injured, there appears to not be a game log entry for them. We want
+        inactive GameLog's for these cases. In these cases, pass game to construct a GameLog.
+        """
         self.player = player
         self.minutes = 0
-        self.game = None
-        self.inactive = False
+        self.game = game
+        self.inactive = (game is not None)
         self.dnp = False
+
+        if tag is None:
+            return
 
         game_directory = GameDirectory.instance()
 
@@ -243,57 +302,6 @@ def get_current_season() -> Season:
     return get_season(datetime.date.today())
 
 
-class GameType(Enum):
-    REGULAR_SEASON = 1
-    PLAYOFFS = 2
-
-
-class GameData:
-    def __init__(self, dt: datetime.date, game_type: GameType, home_team: Team, away_team: Team,
-                 home_score: Optional[int] = None, away_score: Optional[int] = None):
-        self.dt = dt
-        self.game_type = game_type
-        self.home_team = home_team
-        self.away_team = away_team
-        self.home_score = home_score
-        self.away_score = away_score
-        self.home_team_days_rest: Optional[int] = None
-        self.away_team_days_rest: Optional[int] = None
-
-    def __eq__(self, other: 'GameData'):
-        return (self.dt, self.home_team, self.away_team) == (other.dt, other.home_team, other.away_team)
-
-    def __hash__(self):
-        return hash((self.dt, self.home_team, self.away_team))
-
-    def __repr__(self):
-        return f'{self.__class__.__name__}({self.dt}, {self.game_type}, {self.home_team}, {self.away_team}, {self.home_score}, {self.away_score})'
-
-    def __str__(self):
-        return f'{self.away_team}@{self.home_team} on {self.dt.strftime("%Y-%m-%d")}'
-
-    def set_days_rest(self, team: Team, days_rest: int):
-        assert days_rest >= 0, (self, team, days_rest)
-        if team == self.home_team:
-            self.home_team_days_rest = days_rest
-        elif team == self.away_team:
-            self.away_team_days_rest = days_rest
-        else:
-            raise ValueError(f'Unknown team: {team}')
-
-    @property
-    def completed(self) -> bool:
-        return self.home_score is not None
-
-    @property
-    def winning_team(self) -> Optional[Team]:
-        return None if not self.completed else self.home_team if self.home_score > self.away_score else self.away_team
-
-    @property
-    def losing_team(self) -> Optional[Team]:
-        return None if not self.completed else self.away_team if self.home_score > self.away_score else self.home_team
-
-
 def get_season_games(season: Season) -> List[GameData]:
     return list(_get_season_games_iterable(season))
 
@@ -454,6 +462,9 @@ class GameDirectory:
             assert None not in (game.away_team_days_rest , game.home_team_days_rest), game
             self.games[season][game.home_team][game.dt] = game
             self.games[season][game.away_team][game.dt] = game
+
+    def get_games(self, team: Team, season: Season) -> List[GameData]:
+        return list(self.games.get(season, {}).get(team, {}).values())
 
     def get_game(self, team: Team, dt: datetime.date) -> Optional[GameData]:
         season = get_season(dt)
