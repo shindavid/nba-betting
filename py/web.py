@@ -82,7 +82,7 @@ def check_url(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_
     return check_cached_file(url_to_cached_file(url), force_refresh, stale_is_ok, stale_window_in_days)
 
 
-def fetch(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days=1, verbose=True, pause_sec=1):
+def fetch(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days=1, verbose=True, pause_sec=3):
     """
     Fetches the text of the given url.
 
@@ -93,8 +93,7 @@ def fetch(url: str, force_refresh=False, stale_is_ok=False, stale_window_in_days
 
     pause_sec is the number of seconds to pause between requests. This is to avoid hammering the server. Specifically,
     basketball-reference.com has a 20-requests-per-minute limit, a violation of which lands your session in jail for
-    an hour (https://www.sports-reference.com/bot-traffic.html). The default of 1sec I'm using here technically violates
-    that limit, but I'm hoping that the server will be lenient.
+    an hour (https://www.sports-reference.com/bot-traffic.html).
     """
     cached_file = url_to_cached_file(url)
     if check_cached_file(cached_file, force_refresh, stale_is_ok, stale_window_in_days):
