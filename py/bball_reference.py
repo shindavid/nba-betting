@@ -10,6 +10,7 @@ import bs4
 from joblib import Memory
 
 import repo
+import teams
 import web
 from players import Player, normalize_player_name, PlayerName
 from str_util import extract_parenthesized_strs, remove_parenthesized_strs
@@ -30,6 +31,11 @@ INACTIVE_REASONS = {
     'Did Not Dress',
     'Not With Team',
     'Player Suspended',
+}
+
+DNP_REASONS = {
+    'Did Not Play',
+    'DNP',
 }
 
 
@@ -111,7 +117,7 @@ class GameLog:
             reason = reason_tds[0].text
             if reason in INACTIVE_REASONS:
                 self.inactive = True
-            elif reason == 'Did Not Play':
+            elif reason in DNP_REASONS:
                 self.dnp = True
             else:
                 raise ValueError(reason)
@@ -139,6 +145,8 @@ class GameLog:
         opp_abbrev = td_list[5].find('a').text
         opp = Team.parse(opp_abbrev)
 
+        website_bug = (team == opp)  # bunch of KCK vs KCK games at https://www.basketball-reference.com/players/d/douglle01/gamelog/1982
+
         home_team = team if home else opp
         away_team = opp if home else team
 
@@ -146,9 +154,10 @@ class GameLog:
         if game is None:
             # play-in tournament games are missing from basketball-reference.com
             # this must be that case
+            assert not website_bug
             pass
-        else:
-            assert game.home_team == home_team
+        elif not website_bug:
+            assert game.home_team == home_team, (game, home_team, away_team)
             assert game.away_team == away_team
 
         self.game = game
