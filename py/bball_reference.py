@@ -7,23 +7,17 @@ from enum import Enum
 from typing import Iterable, List, Dict, Optional, Set, Union
 
 import bs4
-from joblib import Memory
 
-import repo
-import teams
 import web
+from cache_util import cached
 from players import Player, normalize_player_name, PlayerName
 from str_util import extract_parenthesized_strs, remove_parenthesized_strs
 from teams import Team
-from web import check_url
 
 BASKETBALL_REFERENCE_URL = 'https://www.basketball-reference.com'
 CACHE_HOT_DAYS = 7
 Season = int  # 2002-2003 season is represented by 2003
 FIRST_FULL_SEASON_POST_NBA_ABA_MERGER: Season = 1977
-
-
-memory = Memory(repo.joblib_cache(), verbose=0)
 
 
 INACTIVE_REASONS = {
@@ -175,6 +169,14 @@ class SeasonGameLog:
         self.season = season
         self.games: List[GameLog] = []
 
+    @property
+    def n_regular_season_games(self) -> int:
+        return len([g for g in self.games if g.game.game_type == GameType.REGULAR_SEASON])
+
+    @property
+    def n_playoff_games(self) -> int:
+        return len([g for g in self.games if g.game.game_type == GameType.PLAYOFFS])
+
     def add_game(self, game: GameLog):
         self.games.append(game)
 
@@ -207,8 +209,14 @@ class CareerGameLog:
     def __repr__(self):
         return str(self)
 
+    def summarize(self):
+        print(f'CareerGameLog({self.player})')
+        for season, season_game_log in sorted(self.season_game_logs.items()):
+            print(f'  {season}: {season_game_log.n_regular_season_games} regular season, {season_game_log.n_playoff_games} playoffs')
 
-def _get_career_game_log_uncached(player: Player) -> Optional[CareerGameLog]:
+
+@cached(ignore_cache_if=lambda player: player.active and not web.check_url(player.url, stale_window_in_days=CACHE_HOT_DAYS))
+def get_career_game_log(player: Player) -> Optional[CareerGameLog]:
     career_game_log = CareerGameLog(player)
     html = web.fetch(player.url, stale_window_in_days=CACHE_HOT_DAYS, verbose=True)
     soup = bs4.BeautifulSoup(html, features='html.parser')
@@ -241,21 +249,7 @@ def _get_career_game_log_uncached(player: Player) -> Optional[CareerGameLog]:
     return career_game_log
 
 
-@memory.cache
-def _get_career_game_log_cached(player: Player) -> Optional[CareerGameLog]:
-    return _get_career_game_log_uncached(player)
-
-
-def get_career_game_log(player: Player) -> Optional[CareerGameLog]:
-    if player.active:
-        if web.check_url(player.url, stale_window_in_days=CACHE_HOT_DAYS):
-            return _get_career_game_log_cached(player)
-        else:
-            return _get_career_game_log_uncached(player)
-    else:
-        return _get_career_game_log_cached(player)
-
-
+@cached(ignore_cache_if=lambda url: not web.check_url(url, stale_window_in_days=CACHE_HOT_DAYS))
 def _get_all_players_from_url(url: str) -> Iterable[Player]:
     html = web.fetch(url, stale_window_in_days=CACHE_HOT_DAYS, verbose=True)
     soup = bs4.BeautifulSoup(html, features='html.parser')
@@ -284,19 +278,15 @@ def _get_all_players_from_url(url: str) -> Iterable[Player]:
             raise Exception(f'Failed to parse player from:\n\n{tr}')
 
 
-@memory.cache
-def _get_all_players_from_url_cached(url: str) -> List[Player]:
-    return list(_get_all_players_from_url(url))
-
-
 def _get_all_players_iterable() -> Iterable[Player]:
     # iterate over chars of alphabet
     for c in 'abcdefghijklmnopqrstuvwxyz':
         url = f'{BASKETBALL_REFERENCE_URL}/players/{c}/'
-        if check_url(url, stale_window_in_days=CACHE_HOT_DAYS):
-            yield from _get_all_players_from_url_cached(url)
-        else:
-            yield from _get_all_players_from_url(url)
+        yield from _get_all_players_from_url(url)
+
+
+def get_all_players() -> List[Player]:
+    return list(_get_all_players_iterable())
 
 
 def get_season(dt: datetime.date) -> Season:
@@ -315,19 +305,8 @@ def get_season_games(season: Season) -> List[GameData]:
     return list(_get_season_games_iterable(season))
 
 
-def _get_season_games_iterable(season) -> Iterable[GameData]:
-    if season < get_current_season():
-        yield from _get_season_games_iterable_cached(season)
-    else:
-        yield from _get_season_games_iterable_uncached(season)
-
-
-@memory.cache
-def _get_season_games_iterable_cached(season: Season) -> Iterable[GameData]:
-    return list(_get_season_games_iterable_uncached(season))
-
-
-def _get_season_games_iterable_uncached(season: Season) -> Iterable[GameData]:
+@cached(ignore_cache_if=lambda season: season >= get_current_season())
+def _get_season_games_iterable(season: Season) -> Iterable[GameData]:
     url = f'{BASKETBALL_REFERENCE_URL}/leagues/NBA_{season}_standings.html'
     stale_is_ok = season < get_current_season()
     html = web.fetch(url, stale_is_ok=stale_is_ok)
@@ -416,10 +395,6 @@ def _get_season_team_games_iterable(team: Team, season: Season) -> Iterable[Game
     yield from extract_games_from_tbody(team, tbodies[0], url, GameType.REGULAR_SEASON)
     if len(tbodies) == 2:
         yield from extract_games_from_tbody(team, tbodies[1], url, GameType.PLAYOFFS)
-
-
-def get_all_players() -> List[Player]:
-    return list(_get_all_players_iterable())
 
 
 class PlayerMatchException(Exception):
