@@ -16,6 +16,7 @@ from joblib import Memory
 import repo
 import web
 from bball_reference import PlayerDirectory, InvalidPlayerException, PlayerMatchException
+from cache_util import cached, SEC_PER_DAY
 from players import normalize_player_name, looks_like_player_name, Player, FakePlayer
 from str_util import strip_punctuation, extract_parenthesized_strs, remove_parenthesized_strs
 from teams import Team, TeamNameParseError
@@ -519,7 +520,12 @@ def _get_raw_data_from_url(url, start_dt: datetime.date, end_dt: datetime.date,
         yield from _get_raw_data_from_url(f'{TRANSACTIONS_URL}{query_str}', start_dt, end_dt, directory)
 
 
-def get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -> Iterable[PlayerEvent]:
+@cached(expires_after_sec=lambda start_dt, end_dt: None if trust_cached_data_for(end_dt) else SEC_PER_DAY)
+def get_player_events(start_dt: datetime.date, end_dt: datetime.date) -> List[PlayerEvent]:
+    return list(_get_player_events_iterable(start_dt, end_dt))
+
+
+def _get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -> Iterable[PlayerEvent]:
     """
     Returns all player events on the given date.
     """
@@ -701,27 +707,12 @@ def get_player_events_iterable(start_dt: datetime.date, end_dt: datetime.date) -
             yield Suspension(result.date, result.team, result.relinquished_player, result.notes)
 
 
-def _get_player_events_list_helper(start_dt: datetime.date, end_dt: datetime.date) -> List[PlayerEvent]:
-    try:
-        return list(get_player_events_iterable(start_dt, end_dt))
-    except Exception as e:
-        print(f'Encountered exception! Last parsed URL: {_current_url}')
-        raise e
+@cached(expires_after_sec=SEC_PER_DAY)
+def get_all_player_events() -> List[PlayerEvent]:
+    return list(_get_all_player_events_iterable())
 
 
-# @memory.cache
-def get_player_events_list(start_dt: datetime.date, end_dt: datetime.date) -> List[PlayerEvent]:
-    return _get_player_events_list_helper(start_dt, end_dt)
-
-
-def get_player_events(start_dt: datetime.date, end_dt: datetime.date) -> List[PlayerEvent]:
-    if trust_cached_data_for(end_dt):
-        return get_player_events_list(start_dt, end_dt)
-    else:
-        return _get_player_events_list_helper(start_dt, end_dt)
-
-
-def get_all_player_events() -> Iterable[PlayerEvent]:
+def _get_all_player_events_iterable():
     # batch older dates into entire months
     today = datetime.date.today()
 

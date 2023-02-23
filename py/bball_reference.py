@@ -9,7 +9,7 @@ from typing import Iterable, List, Dict, Optional, Set, Union
 import bs4
 
 import web
-from cache_util import cached
+from cache_util import cached, SEC_PER_DAY
 from players import Player, normalize_player_name, PlayerName
 from str_util import extract_parenthesized_strs, remove_parenthesized_strs
 from teams import Team
@@ -215,7 +215,7 @@ class CareerGameLog:
             print(f'  {season}: {season_game_log.n_regular_season_games} regular season, {season_game_log.n_playoff_games} playoffs')
 
 
-@cached(ignore_cache_if=lambda player: player.active and not web.check_url(player.url, stale_window_in_days=CACHE_HOT_DAYS))
+@cached(expires_after_sec=lambda player: CACHE_HOT_DAYS * SEC_PER_DAY if player.active else None)
 def get_career_game_log(player: Player) -> Optional[CareerGameLog]:
     career_game_log = CareerGameLog(player)
     html = web.fetch(player.url, stale_window_in_days=CACHE_HOT_DAYS, verbose=True)
@@ -249,7 +249,7 @@ def get_career_game_log(player: Player) -> Optional[CareerGameLog]:
     return career_game_log
 
 
-@cached(ignore_cache_if=lambda url: not web.check_url(url, stale_window_in_days=CACHE_HOT_DAYS))
+@cached(expires_after_sec=lambda url: None if web.check_url(url, stale_window_in_days=CACHE_HOT_DAYS) else 0)
 def _get_all_players_from_url(url: str) -> Iterable[Player]:
     html = web.fetch(url, stale_window_in_days=CACHE_HOT_DAYS, verbose=True)
     soup = bs4.BeautifulSoup(html, features='html.parser')
@@ -285,6 +285,7 @@ def _get_all_players_iterable() -> Iterable[Player]:
         yield from _get_all_players_from_url(url)
 
 
+@cached(expires_after_sec=SEC_PER_DAY)
 def get_all_players() -> List[Player]:
     return list(_get_all_players_iterable())
 
@@ -305,7 +306,7 @@ def get_season_games(season: Season) -> List[GameData]:
     return list(_get_season_games_iterable(season))
 
 
-@cached(ignore_cache_if=lambda season: season >= get_current_season())
+@cached(expires_after_sec=lambda season: SEC_PER_DAY if season >= get_current_season() else None)
 def _get_season_games_iterable(season: Season) -> Iterable[GameData]:
     url = f'{BASKETBALL_REFERENCE_URL}/leagues/NBA_{season}_standings.html'
     stale_is_ok = season < get_current_season()
