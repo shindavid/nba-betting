@@ -57,7 +57,7 @@ def cached(f: Optional[Callable] = None, *, expires_after_sec: Union[float, None
                 sec = expires_after_sec(*args, **kwargs) if callable(expires_after_sec) else expires_after_sec
                 expired = sec is not None and now - mtime > sec
                 if expired:
-                    out = self.call(*args, **kwargs)[0]
+                    return self.call(*args, **kwargs)[0]
 
             return out[0]
 
