@@ -111,9 +111,9 @@ def cached(f: Optional[Callable] = None, *, expires_after_sec: Union[float, None
 
     if f is not None:
         assert expires_after_sec is None
-        return memory.cache(f, verbose=100)
+        return memory.cache(f)
 
     def decorator(func):
-        return memory.cache(func, verbose=100)
+        return memory.cache(func)
 
     return decorator
