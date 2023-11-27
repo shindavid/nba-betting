@@ -15,7 +15,7 @@ from teams import Team, EASTERN_CONFERENCE_TEAMS, WESTERN_CONFERENCE_TEAMS, TEAM
 import web
 
 
-FIXTURE_URL = 'https://fixturedownload.com/download/nba-2022-UTC.csv'
+FIXTURE_URL = 'https://fixturedownload.com/download/nba-2023-UTC.csv'
 
 
 class Game:

@@ -70,7 +70,7 @@ ATL = Team('ATL', 'Atlanta Hawks', 'Eastern', 'Southeast')
 BOS = Team('BOS', 'Boston Celtics', 'Eastern', 'Atlantic')
 BRK = Team('BRK', 'Brooklyn Nets', 'Eastern', 'Atlantic')
 CHI = Team('CHI', 'Chicago Bulls', 'Eastern', 'Central')
-CHO = Team('CHO', 'Charlotte Hornets', 'Eastern', 'Southeast')
+CHH = Team('CHH', 'Charlotte Hornets', 'Eastern', 'Southeast')
 CLE = Team('CLE', 'Cleveland Cavaliers', 'Eastern', 'Central')
 DAL = Team('DAL', 'Dallas Mavericks', 'Western', 'Southwest')
 DEN = Team('DEN', 'Denver Nuggets', 'Western', 'Northwest')
@@ -102,7 +102,7 @@ BAL = Team('BAL', 'Baltimore Bullets', 'Defunct', 'Defunct', defunct=True)
 BUF = Team('BUF', 'Buffalo Braves', 'Defunct', 'Defunct', defunct=True)
 CAP = Team('CAP', 'Capital Bullets', 'Defunct', 'Defunct', defunct=True)
 CHA = Team('CHA', 'Charlotte Bobcats', 'Defunct', 'Defunct', defunct=True)
-CHH = Team('CHH', 'Charlotte Hornets', 'Defunct', 'Defunct', defunct=True)
+# CHH = Team('CHH', 'Charlotte Hornets', 'Defunct', 'Defunct', defunct=True)
 CIN = Team('CIN', 'Cincinnati Royals', 'Defunct', 'Defunct', defunct=True)
 KCK = Team('KCK', 'Kansas City Kings', 'Defunct', 'Defunct', defunct=True)
 NJN = Team('NJN', 'New Jersey Nets', 'Defunct', 'Defunct', defunct=True)
@@ -118,7 +118,7 @@ VAN = Team('VAN', 'Vancouver Grizzlies', 'Defunct', 'Defunct', defunct=True)
 WSB = Team('WSB', 'Washington Bullets', 'Defunct', 'Defunct', defunct=True)
 
 
-TEAMS = [ATL, BOS, BRK, CHO, CHI, CLE, DAL, DEN, DET, GSW, HOU, IND, LAC, LAL, MEM, MIA, MIL, MIN, NOP, NYK, OKC, ORL,
+TEAMS = [ATL, BOS, BRK, CHH, CHI, CLE, DAL, DEN, DET, GSW, HOU, IND, LAC, LAL, MEM, MIA, MIL, MIN, NOP, NYK, OKC, ORL,
          PHI, PHO, POR, SAC, SAS, TOR, UTA, WAS]
 
 
