@@ -210,6 +210,9 @@ class TeamSimResults:
     def score(self):
         return sum(k * v for k, v in self.playoff_wins_distribution.items())
 
+    def playoff_count(self):
+        return self.made_playoffs_count
+
     def title_count(self):
         return self.playoff_wins_distribution.get(16, 0)
 
@@ -257,7 +260,8 @@ class TeamSimResults:
     def dump(self, num_sims: int):
         print('-' * 80)
         print(f'{self.team} sim results')
-        print('Title probability: %.2f%%' % (self.title_count() * 100.0 / num_sims))
+        print('Playoff probability: %6.2f%%' % (self.playoff_count() * 100.0 / num_sims))
+        print('Title probability:   %6.2f%%' % (self.title_count() * 100.0 / num_sims))
         TeamSimResults.distribution_dump('Playoff wins', self.playoff_wins_distribution, num_sims, True)
         TeamSimResults.distribution_dump('Regular season wins', self.regular_season_wins_distribution, num_sims)
         if self.made_playoffs_count > 0:
