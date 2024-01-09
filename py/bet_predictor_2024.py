@@ -200,8 +200,9 @@ class PlayoffRecord:
 
 
 class TeamSimResults:
-    def __init__(self, team: Team):
+    def __init__(self, team: Team, standings: Standings):
         self.team = team
+        self.current_win_loss = standings.records[team].overall_win_loss
         self.made_playoffs_count = 0
         self.regular_season_wins_distribution = defaultdict(int)  # wins -> count
         self.seed_distribution = defaultdict(int)  # seed -> count
@@ -258,10 +259,13 @@ class TeamSimResults:
             print('%s%s: %s' % (prefix, key_str, stars))
 
     def dump(self, num_sims: int):
+        wins = self.current_win_loss.wins
+        losses = self.current_win_loss.losses
         print('-' * 80)
         print(f'{self.team} sim results')
         print('Playoff probability: %6.2f%%' % (self.playoff_count() * 100.0 / num_sims))
         print('Title probability:   %6.2f%%' % (self.title_count() * 100.0 / num_sims))
+        print('Current record:      %2dW %2dL' % (wins, losses))
         TeamSimResults.distribution_dump('Playoff wins', self.playoff_wins_distribution, num_sims, True)
         TeamSimResults.distribution_dump('Regular season wins', self.regular_season_wins_distribution, num_sims)
         if self.made_playoffs_count > 0:
@@ -271,14 +275,14 @@ class TeamSimResults:
 
 
 class OverallSimResults:
-    def __init__(self):
+    def __init__(self, standings: Standings):
         self.count = 0
         self.david_team_wins = 0
         self.chris_team_wins = 0
         self.david_bet_wins = 0
         self.chris_bet_wins = 0
         self.tie_count = 0
-        self.team_results: Dict[Team, TeamSimResults] = {t: TeamSimResults(t) for t in TEAMS}
+        self.team_results: Dict[Team, TeamSimResults] = {t: TeamSimResults(t, standings) for t in TEAMS}
 
     def update(self, playoff_record: PlayoffRecord):
         self.count += 1
@@ -464,7 +468,7 @@ def main():
     args = get_args()
 
     predictor = BetPredictor(args.half_life_in_days)
-    sim_results = OverallSimResults()
+    sim_results = OverallSimResults(predictor.standings)
     for _ in range(args.num_sims):
         playoff_record = predictor.simulate()
         sim_results.update(playoff_record)
