@@ -1,8 +1,6 @@
 import datetime
 from typing import Union, List
 
-from unidecode import unidecode
-
 
 PlayerName = str
 
@@ -40,6 +38,8 @@ def normalize_player_name(player_name: PlayerName) -> PlayerName:
     """
     Normalizes a player name to a standard format.
     """
+    from unidecode import unidecode
+
     name = unidecode(player_name.replace('.', ''))  # "B.J. Johnson" -> "BJ Johnson"
 
     # always capitalize the letter following an apostrophe
